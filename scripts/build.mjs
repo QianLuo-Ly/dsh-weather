@@ -25,9 +25,7 @@ const PLATFORM_MODULES = [
   'react-dom',
   'react-dom/client',
   '@deepseek-ai/cordis',
-  '@deepseek-ai/dsh-client-store',
   '@deepseek-ai/dsh-client-ui-slots',
-  '@deepseek-ai/dsh-client-ui-primitives',
 ]
 
 /** Package-specific module rows requested via `dsh.client.inject`. */

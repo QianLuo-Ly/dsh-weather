@@ -45,19 +45,24 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     return scope.subscribe(sync)
   }, [scope])
 
+  // 250ms 防抖：避免每次击键都请求 Open-Meteo Geocoding。
   useEffect(() => {
-    if (search.trim() === '') {
+    const trimmed = search.trim()
+    if (trimmed === '') {
       setSuggestions([])
       return
     }
     let cancelled = false
-    setSearching(true)
-    void searchCity(search, 5)
-      .then((results) => { if (!cancelled) setSuggestions(results) })
-      .catch(() => { if (!cancelled) setSuggestions([]) })
-      .finally(() => { if (!cancelled) setSearching(false) })
+    const timer = window.setTimeout(() => {
+      setSearching(true)
+      void searchCity(trimmed, 5)
+        .then((results) => { if (!cancelled) setSuggestions(results) })
+        .catch(() => { if (!cancelled) setSuggestions([]) })
+        .finally(() => { if (!cancelled) setSearching(false) })
+    }, 250)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [search])
 

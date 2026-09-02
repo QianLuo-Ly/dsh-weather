@@ -4,14 +4,11 @@
  * bundle has no CSS pipeline, so the styles live in an injected `<style>` tag
  * owned by this package (removed with the plugin's DOM effects on unload).
  */
-let ensured = false
-
 /** Ensure the `dsh-weather-styles` stylesheet exists in the document. */
 export function ensureWeatherStyles(): void {
-  if (ensured) return
-  ensured = true
   if (typeof document === 'undefined') return
   const id = 'dsh-weather-styles'
+  // DOM 检查优先：插件卸载/重载（HMR）后 style 标签会被移除，下次挂载需重新注入。
   if (document.getElementById(id) !== null) return
   const style = document.createElement('style')
   style.id = id

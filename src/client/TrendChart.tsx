@@ -27,10 +27,6 @@ const ACCENT = 'var(--dsw-alias-brand-primary, #4f8cff)'
 const MUTED = 'var(--dshw-fg-muted, #5f6672)'
 const DOT_EDGE = 'var(--dsw-alias-bg-layer-2, #ffffff)'
 
-function clamp(value: number, low: number, high: number): number {
-  return Math.max(low, Math.min(high, value))
-}
-
 export function TrendChart(props: TrendChartProps): ReactElement {
   const { values, labels, height = 88, unit = '' } = props
   const gradientId = useId()

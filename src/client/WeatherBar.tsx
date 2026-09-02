@@ -170,6 +170,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             // Qingyuan is only ~70 km from Guangzhou, so the threshold must be
             // tighter than typical inter-city distances).
             void resolveLocationByIp().then((ip) => {
+              if (cancelled) return
               if (haversineKm(cached.latitude, cached.longitude, ip.latitude, ip.longitude) > 50) {
                 void scope.unset('autoLatitude')
                 void scope.unset('autoLongitude')
@@ -599,7 +600,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 6 }}>未来 12 小时</div>
                     <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4 }}>
                       {data.hourly.slice(0, 12).map((point, index) => {
-                        const c = describeCondition(point.weatherCode, true)
                         return (
                           <div key={index} style={{ flex: '0 0 auto', width: 46, textAlign: 'center', background: TOKEN.bgSoft, borderRadius: 10, padding: '5px 2px' }}>
                             <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
@@ -618,7 +618,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 6 }}>未来 7 天</div>
                     <div>
                       {weekly.map((point, index) => {
-                        const c = describeCondition(point.weatherCode, true)
                         const left = ((point.tempMin - weekMin) / weekSpan) * 100
                         const width = Math.max(8, ((point.tempMax - point.tempMin) / weekSpan) * 100)
                         return (

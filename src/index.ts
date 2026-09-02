@@ -48,18 +48,13 @@ export function defaultConfig(): WeatherConfig {
  * `dsh.profile.bundles` layer stack (inserted by `cordis.patch.yml`).
  */
 export function apply(ctx: Context, config: WeatherConfig): void {
-  let current: () => WeatherConfig = () => config
   // The registration rides the settings provider's scope: while the service is
-  // present, our composition entry is the namespace's base layer and `current`
-  // tracks the resolved section; losing the provider falls back to the entry
-  // so the plugin keeps working exactly as composed.
+  // present, our composition entry is the namespace's base layer. The browser
+  // half owns everything derived from the section; a committed change needs no
+  // re-registration here.
   ctx.inject(['settings'], (settingsCtx) => {
     settingsCtx.settings.installSection(ctx, WEATHER_NS, WeatherConfigSchema, config, {
-      setSource: (source) => {
-        current = source
-      },
-      // The browser half owns everything derived from the section; a committed
-      // change needs no re-registration here.
+      setSource: () => {},
       onChange: () => {},
     })
   })
