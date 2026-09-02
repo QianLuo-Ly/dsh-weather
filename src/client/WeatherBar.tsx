@@ -16,7 +16,7 @@
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import type { WeatherConfig } from '../config-shared'
+import { DEFAULT_WEATHER_CONFIG, type WeatherConfig } from '../config-shared'
 import {
   cityLevelName,
   evaluateAlerts,
@@ -39,15 +39,6 @@ export interface WeatherBarProps {
 }
 
 type Status = 'idle' | 'locating' | 'loading' | 'ready' | 'error'
-
-/** Shown until the settings namespace resolves; matches the Host schema defaults. */
-const FALLBACK_CONFIG: WeatherConfig = {
-  enabled: true,
-  locationMode: 'auto',
-  units: 'celsius',
-  refreshMinutes: 15,
-  alertsEnabled: false,
-}
 
 const TOKEN = {
   bg: 'var(--dsw-alias-bg-layer-2, #f3f4f6)',
@@ -91,7 +82,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   // Resolve the effective config: the stored section once the namespace is
   // served, schema defaults otherwise — the bar must not vanish just because
   // the settings document has not mirrored the namespace yet.
-  const effective = config ?? FALLBACK_CONFIG
+  const effective = config ?? DEFAULT_WEATHER_CONFIG
 
   // Keep the config snapshot in sync with settings changes.
   useEffect(() => {
@@ -279,6 +270,10 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     const titleUnit = effective.units === 'fahrenheit' ? '°F' : '°C'
     const temp = `${Math.round(data.current.temperature)}${titleUnit}`
     document.title = `⛅ ${temp} ${data.location.name} — ${appTitle.current}`
+    return () => {
+      // 卸载 / 刷新前恢复应用原标题，避免插件移除后标签页残留天气前缀。
+      if (appTitle.current !== null) document.title = appTitle.current
+    }
   }, [data, effective.enabled, effective.units])
 
   if (!effective.enabled) return null

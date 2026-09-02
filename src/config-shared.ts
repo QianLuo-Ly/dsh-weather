@@ -37,3 +37,16 @@ export interface WeatherConfig {
   /** Cached auto-resolved display name (set by the plugin, not user-editable). */
   autoCityName?: string
 }
+
+/**
+ * Fallback configuration matching the Host schema defaults, used until the
+ * settings namespace resolves so the bar never vanishes on first paint.
+ * Keep in sync with `WeatherConfigSchema` defaults in src/index.ts.
+ */
+export const DEFAULT_WEATHER_CONFIG: WeatherConfig = {
+  enabled: true,
+  locationMode: 'auto',
+  units: 'celsius',
+  refreshMinutes: 15,
+  alertsEnabled: false,
+}

@@ -8,29 +8,20 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { WEATHER_NS, type WeatherConfig } from './config-shared'
+import { DEFAULT_WEATHER_CONFIG, WEATHER_NS, type WeatherConfig } from './config-shared'
 // Local shim for the runtime `ctx.settings` service (see dsh-settings.d.ts).
 import type {} from './dsh-settings'
 
-/** The composition entry this bundle ships as the namespace base. */
-const BASE: WeatherConfig = {
-  enabled: true,
-  locationMode: 'auto',
-  units: 'celsius',
-  refreshMinutes: 15,
-  alertsEnabled: false,
-}
-
 /** Settings schema for the `weather` namespace. */
 export const WeatherConfigSchema = z.object({
-  enabled: z.boolean().default(BASE.enabled),
-  locationMode: z.union([z.const('auto'), z.const('manual')]).default(BASE.locationMode),
+  enabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.enabled),
+  locationMode: z.union([z.const('auto'), z.const('manual')]).default(DEFAULT_WEATHER_CONFIG.locationMode),
   latitude: z.number().min(-90).max(90).required(false),
   longitude: z.number().min(-180).max(180).required(false),
   cityName: z.string().required(false),
-  units: z.union([z.const('celsius'), z.const('fahrenheit')]).default(BASE.units),
-  refreshMinutes: z.number().step(1).min(5).max(1440).default(BASE.refreshMinutes),
-  alertsEnabled: z.boolean().default(BASE.alertsEnabled),
+  units: z.union([z.const('celsius'), z.const('fahrenheit')]).default(DEFAULT_WEATHER_CONFIG.units),
+  refreshMinutes: z.number().step(1).min(5).max(1440).default(DEFAULT_WEATHER_CONFIG.refreshMinutes),
+  alertsEnabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.alertsEnabled),
   // Internal auto-location cache (written by the browser half, kept out of the
   // settings UI so the resolved location stays stable across refreshes).
   autoLatitude: z.number().min(-90).max(90).required(false),
@@ -40,7 +31,7 @@ export const WeatherConfigSchema = z.object({
 
 /** Defaults for callers that want a fresh config object. */
 export function defaultConfig(): WeatherConfig {
-  return { ...BASE }
+  return { ...DEFAULT_WEATHER_CONFIG }
 }
 
 /**

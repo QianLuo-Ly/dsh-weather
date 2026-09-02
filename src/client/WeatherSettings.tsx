@@ -6,7 +6,7 @@
  */
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import type { WeatherConfig } from '../config-shared'
+import { DEFAULT_WEATHER_CONFIG, type WeatherConfig } from '../config-shared'
 import { searchCity, type GeoLocation } from './weather-api'
 
 export interface WeatherSettingsSectionProps {
@@ -21,15 +21,6 @@ const MUTED = 'var(--dshw-fg-muted, #5f6672)'
 const BORDER = 'var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12))'
 const BG_ROW = 'var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.03))'
 const ACCENT = 'var(--dsw-alias-brand-primary, #4f8cff)'
-
-/** Shown until the settings namespace resolves; matches the Host schema defaults. */
-const FALLBACK_CONFIG: WeatherConfig = {
-  enabled: true,
-  locationMode: 'auto',
-  units: 'celsius',
-  refreshMinutes: 15,
-  alertsEnabled: false,
-}
 
 export function WeatherSettingsSection(props: WeatherSettingsSectionProps): ReactElement {
   const { scope } = props
@@ -66,7 +57,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     }
   }, [search])
 
-  const effective = config ?? FALLBACK_CONFIG
+  const effective = config ?? DEFAULT_WEATHER_CONFIG
   const snapshot = scope.getSnapshot()
   const writable = snapshot.writable
 
