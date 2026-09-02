@@ -1,0 +1,4 @@
+# dsh-weather bundle patch: inserts the weather plugin into a profile's layer stack.
+- insert:
+    - id: dsh-weather
+      name: 'dsh-weather'
