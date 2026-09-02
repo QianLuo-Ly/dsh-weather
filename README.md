@@ -22,10 +22,10 @@ DSH Web 顶部居中的天气插件：**定位信息 + 当前天气 + 未来 12 
 2. 重启 `dsh web`，打开 **设置 → 插件市场**，搜索 **weather**，一键安装 `dsh-weather`。
 3. 刷新页面，顶部即可看到天气栏。
 
-**方式二：命令行直接安装**
+**方式二：命令行从 GitHub 安装**
 
 ```sh
-dsh plugin --profile web add dsh-weather
+dsh plugin --profile web add https://github.com/QianLuo-Ly/dsh-weather
 ```
 
 重启（或按提示刷新）`dsh web` 后生效。

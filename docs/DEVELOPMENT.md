@@ -57,6 +57,11 @@ src/client/           # 浏览器半侧
 scripts/build.mjs     # esbuild 构建脚本
 ```
 
-## 发布
+## 发布与收录
 
-发布前先 `npm run check`（typecheck + build），确认产物最新，然后 `npm publish`。
+本项目**不发布 npm**，纯 GitHub 收录：向 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
+仓库提 PR，在 `data/plugins/` 下新增 `QianLuo-Ly__dsh-weather.yml`（草稿见本目录
+`.release/`）。合并后（约一天内）自动出现在 dsh-market 的「设置 → 插件市场」。
+
+发布新版本时：改 `package.json` 版本号（如需）、重新 `npm run check`、推送到
+`main` 即可——市场与网站按仓库自动同步，无需其他步骤。
