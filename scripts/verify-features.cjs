@@ -1,0 +1,8 @@
+const fs = require('node:fs')
+const c = fs.readFileSync('D:/2_MyProject/dsh-weather/lib/client.js', 'utf8')
+console.log('dark-mode override (data-ds-dark-theme):', c.includes('data-ds-dark-theme'))
+console.log('dshw-fg var:', c.includes('--dshw-fg'))
+console.log('pure white in dark:', c.includes('#ffffff'))
+console.log('trend gutter max label (textAnchor end):', c.includes('textAnchor="end"'))
+console.log('trend guide line (dasharray):', c.includes('3 3'))
+console.log('now ring marker (first point):', c.includes('3.5'))

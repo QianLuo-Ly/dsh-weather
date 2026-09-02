@@ -1,0 +1,6 @@
+const fs = require('node:fs')
+const c = fs.readFileSync('D:/2_MyProject/dsh-weather/lib/client.js', 'utf8')
+console.log('bundle head ok:', c.startsWith('window.__ModuleLoader__.load({ id: "dsh-weather"'))
+console.log('bytes:', c.length)
+console.log('has WeatherBar:', c.includes('WeatherBar'))
+console.log('has FALLBACK_CONFIG default enabled:', c.includes('"enabled":true') || c.includes('enabled: !0'))
