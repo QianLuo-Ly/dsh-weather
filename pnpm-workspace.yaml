@@ -1,0 +1,12 @@
+packages:
+  - .
+
+allowBuilds:
+  esbuild: true
+
+# Force the transitive @deepseek-ai/dsh-invariants resolution to the version
+# installed in the target dsh web profile (0.1.1-rc.2). The published
+# dsh-client-*@0.1.0-rc.8 range `^0.1.0-rc.8` otherwise lets pnpm climb to
+# dsh-api-remotes versions whose `^0.1.1` range excludes every prerelease.
+overrides:
+  '@deepseek-ai/dsh-invariants': 0.1.1-rc.2

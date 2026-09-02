@@ -1,0 +1,10 @@
+node_modules/
+lib/
+*.tsbuildinfo
+.DS_Store
+# 本地联调产物（构建 bundle、DOM dump、临时页面等），不进入仓库
+harness/
+# 个人本地调试脚本
+scripts/set-manual-panyu.mjs
+# 上架准备草稿（PR 条目文件等）
+.release/
