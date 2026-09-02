@@ -7,6 +7,8 @@ DSH Web 顶部居中的天气插件：**定位信息 + 当前天气 + 未来 12 
 - 自动定位优先使用浏览器定位（GPS/WiFi，可精确到区），失败或拒绝时回退 IP 定位
 - **不收集、不上传任何个人数据**，配置仅保存在本地
 
+![demo](https://raw.githubusercontent.com/QianLuo-Ly/dsh-weather/main/assets/demo.png)
+
 ## 安装
 
 **方式一：插件市场一键安装（推荐）**
