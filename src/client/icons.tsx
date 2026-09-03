@@ -202,7 +202,7 @@ export function WeatherIcon(props: { code: number; isDay: boolean; size?: number
   )
 }
 
-export type GlyphName = 'droplet' | 'wind' | 'umbrella' | 'refresh' | 'pin' | 'sunrise' | 'sunset' | 'sun' | 'sliders' | 'chevron-left'
+export type GlyphName = 'droplet' | 'wind' | 'umbrella' | 'refresh' | 'pin' | 'sunrise' | 'sunset' | 'sun' | 'sliders' | 'chevron-left' | 'cloud' | 'eye' | 'gauge'
 
 /** Small utility glyphs used inside the popover. */
 export function Glyph(props: { name: GlyphName; size?: number }): ReactElement {
@@ -280,6 +280,20 @@ export function Glyph(props: { name: GlyphName; size?: number }): ReactElement {
       </g>
     ),
     'chevron-left': <polyline points="15 18 9 12 15 6" />,
+    cloud: <path d={CLOUD} />,
+    eye: (
+      <g>
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+        <circle cx="12" cy="12" r="3" />
+      </g>
+    ),
+    gauge: (
+      <g>
+        <path d="M5 15a7 7 0 1 1 14 0" />
+        <path d="M12 15l4.2-4.2" />
+        <circle cx="12" cy="15" r="1.3" fill="currentColor" stroke="none" />
+      </g>
+    ),
   }
   return (
     <svg

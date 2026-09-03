@@ -18,6 +18,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactElement } fr
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import { DEFAULT_WEATHER_CONFIG, type WeatherConfig } from '../config-shared'
 import {
+  RAIN_MM_PER_15MIN,
   cityLevelName,
   evaluateAlerts,
   fetchWeather,
@@ -27,7 +28,7 @@ import {
   type GeoLocation,
   type WeatherData,
 } from './weather-api'
-import { aqiInfo, dayLabel, describeCondition, hourLabel, timeLabel, uvLevel, weatherAdvice } from './condition'
+import { aqiInfo, dayLabel, describeCondition, hourLabel, rainSoonShortText, rainTimingText, timeLabel, uvLevel, weatherAdvice, windDirectionText } from './condition'
 import { Glyph, WeatherIcon } from './icons'
 import { TrendChart } from './TrendChart'
 
@@ -66,6 +67,11 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const bypassCacheRef = useRef(false)
   // alert key -> last notification timestamp (per-session dedupe window).
   const notifiedAt = useRef(new Map<string, number>())
+  // Last successful payload (keyed by location+unit): a failed refresh degrades
+  // to this snapshot instead of leaving an empty bar.
+  const lastGoodRef = useRef<{ weather: WeatherData; key: string; units: WeatherConfig['units'] } | null>(null)
+  const [stale, setStale] = useState(false)
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
   // The app's own tab title, captured once so the weather prefix can be stripped.
   const appTitle = useRef<string | null>(null)
 
@@ -204,17 +210,36 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   useEffect(() => {
     if (!effective.enabled || location === null) return
     let cancelled = false
+    const locKey = `${location.latitude.toFixed(5)},${location.longitude.toFixed(5)}`
     setStatus('loading')
     void (async () => {
       try {
         const weather = await fetchWeather(location, effective.units)
         if (cancelled) return
+        lastGoodRef.current = { weather, key: locKey, units: effective.units }
         setData(weather)
+        setUpdatedAt(Date.now())
+        setError(null)
+        setStale(false)
         setStatus('ready')
       } catch (err) {
         if (cancelled) return
-        setStatus('error')
-        setError(err instanceof Error ? err.message : String(err))
+        const message = err instanceof Error ? err.message : String(err)
+        // Degrade to the cached snapshot only when it belongs to the SAME
+        // location and unit — a stale snapshot from another city or unit would
+        // mislead more than an error.
+        const cache = lastGoodRef.current
+        if (cache !== null && cache.units === effective.units && cache.key === locKey) {
+          setData(cache.weather)
+          setError(message)
+          setStale(true)
+          setStatus('ready')
+        } else {
+          setData(null)
+          setError(message)
+          setStale(false)
+          setStatus('error')
+        }
       }
     })()
     return () => {
@@ -238,16 +263,30 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   }, [effective.alertsEnabled])
 
   // Fire a browser notification when a severe-weather alert appears, at most
-  // once per alert combination per hour.
+  // once per alert combination per hour (4 h for lead-time `*-soon` alerts, so
+  // an approaching storm does not nag on every auto-refresh).
   useEffect(() => {
     if (!effective.alertsEnabled || data === null) return
     const unit = effective.units === 'fahrenheit' ? '°F' : '°C'
     const fmtLocal = (value: number): string => `${Math.round(value)}${unit}`
     const alerts = evaluateAlerts(data, fmtLocal)
+    // Rain-soon notification: expected to start within the hour and not already
+    // falling. Display-side only otherwise — never a banner/alert badge.
+    const rain = data.rainSoon
+    if (rain !== undefined && !rain.rainingNow
+      && rain.onsetMinutes !== undefined && rain.onsetMinutes <= 60) {
+      alerts.push({
+        key: 'rain-soon',
+        level: 'warning',
+        title: '即将降雨',
+        detail: `预计 ${Math.max(15, Math.round(rain.onsetMinutes / 5) * 5)} 分钟后开始下雨，出门记得带伞`,
+      })
+    }
     if (alerts.length === 0) return
     const key = alerts.map((alert) => alert.key).sort().join('+')
     const now = Date.now()
-    if (now - (notifiedAt.current.get(key) ?? 0) < 60 * 60_000) return
+    const dedupeMs = key.includes('-soon') ? 4 * 60 * 60_000 : 60 * 60_000
+    if (now - (notifiedAt.current.get(key) ?? 0) < dedupeMs) return
     notifiedAt.current.set(key, now)
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
     try {
@@ -290,6 +329,12 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     : null
   const name = location?.name ?? (effective.locationMode === 'manual' ? (effective.cityName ?? '当前位置') : '定位中…')
 
+  // Short "rain incoming" hint for the pill subtitle (only when not already
+  // raining — an active shower is already visible from the condition itself).
+  const rainShort = data?.rainSoon !== undefined && !data.rainSoon.rainingNow
+    ? rainSoonShortText(data.rainSoon)
+    : undefined
+
   const subText = status === 'locating'
     ? '定位中…'
     : status === 'loading'
@@ -297,7 +342,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
       : status === 'error'
         ? '⚠ 加载失败'
         : data !== null && condition !== null
-          ? `${condition.label} · 体感 ${fmt(data.current.apparentTemperature)}`
+          ? `${condition.label} · 体感 ${fmt(data.current.apparentTemperature)}${rainShort !== undefined ? ` · ☔ ${rainShort}` : ''}`
           : ''
 
   const showTemp = status === 'ready' && data !== null
@@ -315,6 +360,24 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const air = data?.air
   const airInfo = air !== undefined ? aqiInfo(air.aqi) : null
   const advice = data !== null ? weatherAdvice(data) : null
+
+  // Derived display values for the extended environment facts.
+  const windSuffix = effective.units === 'celsius' ? 'km/h' : 'mph'
+  const cur = data?.current
+  const windDeg = cur?.windDirection
+  const windText = windDeg !== undefined ? windDirectionText(windDeg) : undefined
+  const gustValue = cur?.windGusts
+  const gustText = gustValue !== undefined ? `${Math.round(gustValue)} ${windSuffix}` : undefined
+  const dewValue = cur?.dewPoint
+  const dewPointText = dewValue !== undefined ? `${Math.round(dewValue)}${unit}` : undefined
+  const pressureValue = cur?.pressure
+  const pressureText = pressureValue !== undefined ? `${Math.round(pressureValue)} hPa` : undefined
+  const visibilityValue = cur?.visibility
+  const visibilityText = visibilityValue !== undefined ? `${Math.round(visibilityValue)} km` : undefined
+  const cloudValue = cur?.cloudCover
+  const cloudText = cloudValue !== undefined ? `${Math.round(cloudValue)}%` : undefined
+  const rainTotal = data?.daily[0]?.precipSum
+  const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05 ? `${rainTotal.toFixed(1)} mm` : undefined
 
   return (
     <div
@@ -463,6 +526,16 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     </button>
                   </div>
 
+                  {/* Stale-snapshot banner: the last refresh failed, showing cached data */}
+                  {stale && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, lineHeight: '17px', color: '#b45309', background: 'rgba(180, 83, 9, 0.1)', border: '1px solid rgba(180, 83, 9, 0.28)', borderRadius: 10, padding: '6px 10px' }}>
+                      <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                        数据更新失败{error !== null ? `（${error}）` : ''}，显示 {updatedAt !== null ? `${hhmm(updatedAt)} 的` : '上次'}快照
+                      </span>
+                      <button type="button" onClick={() => setTick((n) => n + 1)} style={actionButton}>⟳ 重试</button>
+                    </div>
+                  )}
+
                   {/* Alert banner */}
                   {alerts.length > 0 && (
                     <div
@@ -529,7 +602,55 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                         PM2.5 {Math.round(air.pm25)}
                       </span>
                     )}
+                    {windText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="wind" size={14} /> {windText}
+                      </span>
+                    )}
+                    {gustText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="wind" size={14} /> 阵风 {gustText}
+                      </span>
+                    )}
+                    {dewPointText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="droplet" size={14} /> 露点 {dewPointText}
+                      </span>
+                    )}
+                    {pressureText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="gauge" size={14} /> 气压 {pressureText}
+                      </span>
+                    )}
+                    {visibilityText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="eye" size={14} /> 能见度 {visibilityText}
+                      </span>
+                    )}
+                    {cloudText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="cloud" size={14} /> 云量 {cloudText}
+                      </span>
+                    )}
+                    {rainTotalText !== undefined && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Glyph name="droplet" size={14} /> 今日雨量 {rainTotalText}
+                      </span>
+                    )}
                   </div>
+
+                  {/* 15-minute precipitation strip */}
+                  {data.minutely !== undefined && data.minutely.length > 0 && (
+                    <div data-block="rain" style={{ marginTop: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>未来 6 小时降水</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: data.rainSoon?.rainingNow === true || data.rainSoon?.onsetMinutes !== undefined ? TOKEN.accent : TOKEN.fgMuted }}>
+                          {rainTimingText(data.rainSoon ?? { rainingNow: false })}
+                        </span>
+                      </div>
+                      <RainStrip points={data.minutely} />
+                    </div>
+                  )}
 
                   {/* One-line advice */}
                   {advice !== null && (
@@ -649,6 +770,50 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   )
 }
 
+/** `HH:MM` for a millisecond timestamp. */
+function hhmm(millis: number): string {
+  const date = new Date(millis)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/**
+ * Mini bar strip of 15-minute precipitation (one column per step). Bar height
+ * scales with the step amount; dry steps stay as a low neutral tick, wet
+ * steps deepen with intensity.
+ */
+function RainStrip(props: { points: Array<{ time: string; precipitation: number }> }): ReactElement {
+  const { points } = props
+  const maxValue = Math.max(...points.map((point) => point.precipitation), 0.5)
+  return (
+    <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}>
+      {points.map((point, index) => {
+        const value = point.precipitation
+        const wet = value >= RAIN_MM_PER_15MIN
+        const height = wet ? Math.max(8, Math.min(30, 6 + (value / maxValue) * 24)) : 4
+        const color = !wet
+          ? 'var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12))'
+          : value >= 2.5
+            ? '#3b82f6'
+            : value >= 1
+              ? '#60a5fa'
+              : '#93c5fd'
+        return (
+          <div key={index} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <div
+              title={`${timeLabel(point.time)} ${value.toFixed(1)} mm`}
+              style={{ width: '100%', maxWidth: 14, height, borderRadius: 3, background: color, transition: 'height 0.2s ease' }}
+            />
+            <span style={{ fontSize: 9, lineHeight: '12px', color: TOKEN.fgMuted, whiteSpace: 'nowrap' }}>
+              {index % 4 === 0 ? timeLabel(point.time) : ''}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function StatChip(props: {
   icon: ReactElement
   label: string
@@ -657,10 +822,10 @@ function StatChip(props: {
   valueColor?: string
   compact?: boolean
 }): ReactElement {
-  return (
-    <div
-      style={{
-        flex: '1 1 0',
+    return (
+      <div
+        style={{
+          flex: '1 1 0',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',

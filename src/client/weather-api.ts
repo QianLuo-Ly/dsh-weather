@@ -53,6 +53,20 @@ export interface CurrentWeather {
   windSpeed: number
   weatherCode: number
   isDay: boolean
+  /** Meteorological wind direction in degrees (0–360, wind blows *from* this). */
+  windDirection?: number
+  /** Wind gust speed (same unit as `windSpeed`). */
+  windGusts?: number
+  /** Surface air pressure (hPa). */
+  pressure?: number
+  /** Total cloud cover (0–100 %). */
+  cloudCover?: number
+  /** Horizontal visibility (km). */
+  visibility?: number
+  /** Dew point temperature (same unit as `temperature`). */
+  dewPoint?: number
+  /** Current precipitation rate (mm/h). */
+  precipitation?: number
 }
 
 export interface HourlyPoint {
@@ -61,6 +75,10 @@ export interface HourlyPoint {
   temperature: number
   weatherCode: number
   precipProb: number
+  /** Sustained wind speed at this hour (km/h or mph, per active unit). */
+  windSpeed?: number
+  /** Wind gust speed at this hour (km/h or mph, per active unit). */
+  windGusts?: number
 }
 
 export interface DailyPoint {
@@ -70,6 +88,10 @@ export interface DailyPoint {
   tempMax: number
   tempMin: number
   precipProb: number
+  /** Total precipitation for the day (mm). */
+  precipSum?: number
+  /** Day-max wind gust (km/h or mph, per active unit). */
+  windGustsMax?: number
 }
 
 export interface WeatherData {
@@ -85,7 +107,67 @@ export interface WeatherData {
   uvIndexMax?: number
   /** Current air quality (US AQI + PM2.5), absent when the feed is unavailable. */
   air?: { aqi: number; pm25: number }
+  /** 15-minute precipitation steps for the coming hours (Open-Meteo minutely_15). */
+  minutely?: MinutelyPoint[]
+  /** Rain timing derived from `minutely` (absent when that feed is unavailable). */
+  rainSoon?: RainScan
   unitLabel: '°C' | '°F'
+}
+
+/** Length of one Open-Meteo `minutely_15` step in minutes. */
+export const MINUTE_STEP_MIN = 15
+/** Minutely steps kept for the rain strip and onset detection (6 h). */
+export const MINUTELY_STEPS = 24
+/** Precipitation (mm per 15 min) at/above which a step counts as raining. */
+export const RAIN_MM_PER_15MIN = 0.1
+
+export interface MinutelyPoint {
+  /** ISO instant (local, `timezone=auto`), at 15-minute grid positions. */
+  time: string
+  /** Precipitation over this 15-minute step (mm). */
+  precipitation: number
+}
+
+/** Rain timing derived from a minutely precipitation scan. */
+export interface RainScan {
+  /** Whether rain is falling right now (the current step is wet). */
+  rainingNow: boolean
+  /** Minutes from now until the first wet step (only when not raining yet). */
+  onsetMinutes?: number
+  /** Consecutive wet minutes at the current/onset point. */
+  durationMinutes?: number
+  /** Total minutes covered by the scanned steps. */
+  windowMinutes: number
+}
+
+/**
+ * Scan minutely precipitation steps for the next rain: is it raining now, and
+ * if not, when does the first wet step start and how long does the wet spell
+ * last. Step values are in mm per 15 minutes (the API's native unit — the
+ * plugin keeps precipitation in mm even in °F mode so thresholds stay unit-
+ * independent); a step at/above {@link RAIN_MM_PER_15MIN} counts as rain.
+ */
+export function scanRain(steps: MinutelyPoint[]): RainScan {
+  const windowMinutes = steps.length * MINUTE_STEP_MIN
+  const wet = (i: number): boolean => steps[i] !== undefined && steps[i].precipitation >= RAIN_MM_PER_15MIN
+  if (steps.length === 0) return { rainingNow: false, windowMinutes }
+  if (wet(0)) {
+    let end = 1
+    while (end < steps.length && wet(end)) end += 1
+    return { rainingNow: true, durationMinutes: end * MINUTE_STEP_MIN, windowMinutes }
+  }
+  for (let start = 1; start < steps.length; start += 1) {
+    if (!wet(start)) continue
+    let end = start + 1
+    while (end < steps.length && wet(end)) end += 1
+    return {
+      rainingNow: false,
+      onsetMinutes: start * MINUTE_STEP_MIN,
+      durationMinutes: (end - start) * MINUTE_STEP_MIN,
+      windowMinutes,
+    }
+  }
+  return { rainingNow: false, windowMinutes }
 }
 
 const GEO_SEARCH_URL = 'https://geocoding-api.open-meteo.com/v1/search'
@@ -464,9 +546,24 @@ export async function fetchWeather(
   const params = new URLSearchParams({
     latitude: String(location.latitude),
     longitude: String(location.longitude),
-    current: 'temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,is_day',
-    hourly: 'temperature_2m,weather_code,precipitation_probability',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max',
+    current: [
+      'temperature_2m',
+      'relative_humidity_2m',
+      'apparent_temperature',
+      'weather_code',
+      'wind_speed_10m',
+      'is_day',
+      'wind_direction_10m',
+      'wind_gusts_10m',
+      'surface_pressure',
+      'cloud_cover',
+      'visibility',
+      'dew_point_2m',
+      'precipitation',
+    ].join(','),
+    hourly: 'temperature_2m,weather_code,precipitation_probability,wind_speed_10m,wind_gusts_10m',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max,precipitation_sum,wind_gusts_10m_max',
+    minutely_15: 'precipitation',
     timezone: 'auto',
     forecast_days: '7',
     language: 'zh',
@@ -474,7 +571,8 @@ export async function fetchWeather(
   if (units === 'fahrenheit') {
     params.set('temperature_unit', 'fahrenheit')
     params.set('wind_speed_unit', 'mph')
-    params.set('precipitation_unit', 'inch')
+    // Precipitation intentionally stays in mm even in °F mode — thresholds,
+    // the rain strip and totals are then unit-independent.
   }
   const airParams = new URLSearchParams({
     latitude: String(location.latitude),
@@ -496,22 +594,37 @@ export async function fetchWeather(
       weather_code?: number
       wind_speed_10m?: number
       is_day?: number
+      wind_direction_10m?: number | null
+      wind_gusts_10m?: number | null
+      surface_pressure?: number | null
+      cloud_cover?: number | null
+      visibility?: number | null
+      dew_point_2m?: number | null
+      precipitation?: number | null
     }
     hourly?: {
       time?: string[]
-      temperature_2m?: number[]
-      weather_code?: number[]
-      precipitation_probability?: number[]
+      temperature_2m?: (number | null)[]
+      weather_code?: (number | null)[]
+      precipitation_probability?: (number | null)[]
+      wind_speed_10m?: (number | null)[]
+      wind_gusts_10m?: (number | null)[]
     }
     daily?: {
       time?: string[]
-      weather_code?: number[]
-      temperature_2m_max?: number[]
-      temperature_2m_min?: number[]
-      precipitation_probability_max?: number[]
+      weather_code?: (number | null)[]
+      temperature_2m_max?: (number | null)[]
+      temperature_2m_min?: (number | null)[]
+      precipitation_probability_max?: (number | null)[]
       sunrise?: string[]
       sunset?: string[]
-      uv_index_max?: number[]
+      uv_index_max?: (number | null)[]
+      precipitation_sum?: (number | null)[]
+      wind_gusts_10m_max?: (number | null)[]
+    }
+    minutely_15?: {
+      time?: string[]
+      precipitation?: (number | null)[]
     }
   }
   // Air quality is additive: a failure must not sink the forecast.
@@ -541,6 +654,27 @@ export async function fetchWeather(
     : -1
   const from = nowIndex >= 0 ? nowIndex : 0
 
+  // 15-minute precipitation, kept unit-independent (mm). Align to the current
+  // step and keep MINUTELY_STEPS ahead (6 h) — enough for a useful rain strip
+  // and early-onset detection without carrying the full 24 h payload.
+  let minutely: WeatherData['minutely']
+  let rainSoon: WeatherData['rainSoon']
+  const minuteTimes = json.minutely_15?.time ?? []
+  if (minuteTimes.length > 0) {
+    const minuteFrom = current.time !== undefined
+      ? minuteTimes.findIndex((t) => t >= current.time!)
+      : -1
+    const mStart = minuteFrom >= 0 ? minuteFrom : 0
+    const precipitation = json.minutely_15?.precipitation ?? []
+    const steps: MinutelyPoint[] = minuteTimes.slice(mStart, mStart + MINUTELY_STEPS)
+      .map((time, index) => ({
+        time,
+        precipitation: precipitation[mStart + index] ?? 0,
+      }))
+    minutely = steps
+    rainSoon = scanRain(steps)
+  }
+
   return {
     location,
     current: {
@@ -550,12 +684,21 @@ export async function fetchWeather(
       windSpeed: current.wind_speed_10m ?? 0,
       weatherCode: current.weather_code ?? -1,
       isDay: (current.is_day ?? 1) === 1,
+      windDirection: current.wind_direction_10m ?? undefined,
+      windGusts: current.wind_gusts_10m ?? undefined,
+      pressure: current.surface_pressure ?? undefined,
+      cloudCover: current.cloud_cover ?? undefined,
+      visibility: current.visibility ?? undefined,
+      dewPoint: current.dew_point_2m ?? undefined,
+      precipitation: current.precipitation ?? undefined,
     },
     hourly: (hourly?.time ?? []).slice(from, from + 24).map((time, index) => ({
       time,
       temperature: hourly?.temperature_2m?.[from + index] ?? 0,
       weatherCode: hourly?.weather_code?.[from + index] ?? -1,
       precipProb: hourly?.precipitation_probability?.[from + index] ?? 0,
+      windSpeed: hourly?.wind_speed_10m?.[from + index] ?? undefined,
+      windGusts: hourly?.wind_gusts_10m?.[from + index] ?? undefined,
     })),
     daily: (daily?.time ?? []).slice(0, 7).map((date, index) => ({
       date,
@@ -563,11 +706,15 @@ export async function fetchWeather(
       tempMax: daily?.temperature_2m_max?.[index] ?? 0,
       tempMin: daily?.temperature_2m_min?.[index] ?? 0,
       precipProb: daily?.precipitation_probability_max?.[index] ?? 0,
+      precipSum: daily?.precipitation_sum?.[index] ?? undefined,
+      windGustsMax: daily?.wind_gusts_10m_max?.[index] ?? undefined,
     })),
     sunrise: daily?.sunrise?.[0],
     sunset: daily?.sunset?.[0],
-    uvIndexMax: daily?.uv_index_max?.[0],
+    uvIndexMax: daily?.uv_index_max?.[0] ?? undefined,
     air,
+    minutely,
+    rainSoon,
     unitLabel: units === 'fahrenheit' ? '°F' : '°C',
   }
 }
@@ -580,31 +727,114 @@ export interface WeatherAlert {
   detail: string
 }
 
+/** Heat-alert threshold, °C (converted internally when the active unit is °F). */
+const HEAT_C = 35
+/** Cold-alert threshold, °C. */
+const COLD_C = 0
+/** Sustained-wind alert threshold, km/h. */
+const WIND_KMH = 60
+/** How many hours of hourly forecast the lead-time scan covers. */
+const LEAD_HOURS = 12
+
+const HEAVY_RAIN_CODES = new Set([65, 82, 99])
+const THUNDER_CODES = new Set([95, 96])
+const STORM_CODES = new Set([...HEAVY_RAIN_CODES, ...THUNDER_CODES])
+const HEAVY_SNOW_CODES = new Set([75, 86])
+
 /**
- * Rule-based severe-weather evaluation over the current conditions. Open-Meteo
- * has no alert coverage for China (MeteoAlarm is Europe-centric), so the
- * plugin derives actionable alerts from the observed weather itself.
- * @param fmt - temperature/wind formatter bound to the active unit.
+ * Rule-based severe-weather evaluation. Open-Meteo has no alert coverage for
+ * China (MeteoAlarm is Europe-centric), so the plugin derives actionable
+ * alerts from the observed and forecast weather itself.
+ *
+ * Two tiers are evaluated:
+ * - **Current** — what the conditions are right now (`heat`/`cold`/`wind`/
+ *   `heavy-rain`/`thunder`/`heavy-snow`).
+ * - **Lead time** (`*-soon`) — a severe condition in the next {@link LEAD_HOURS}
+ *   hours of the hourly forecast, only when the matching current alert is not
+ *   already firing, so a storm/heatwave on the way gets announced ahead of time
+ *   without double-notifying an ongoing one.
+ *
+ * Thresholds are evaluated in °C / km/h regardless of the display unit
+ * (the API converts values to °F / mph in fahrenheit mode), so the rules stay
+ * unit-independent.
+ * @param fmt - temperature formatter bound to the active unit (°C/°F).
  */
 export function evaluateAlerts(data: WeatherData, fmt: (value: number) => string): WeatherAlert[] {
+  const unit = data.unitLabel
+  const toCelsius = (v: number): number => unit === '°F' ? ((v - 32) * 5) / 9 : v
+  const toKmh = (v: number): number => unit === '°F' ? v * 1.609344 : v
   const alerts: WeatherAlert[] = []
+  const hasKey = (key: string): boolean => alerts.some((alert) => alert.key === key)
   const current = data.current
-  if (current.temperature >= 35) {
+
+  const tempC = toCelsius(current.temperature)
+  if (tempC >= HEAT_C) {
     alerts.push({ key: 'heat', level: 'warning', title: '高温', detail: `当前 ${fmt(current.temperature)}，注意防暑` })
-  } else if (current.temperature <= 0) {
+  } else if (tempC <= COLD_C) {
     alerts.push({ key: 'cold', level: 'warning', title: '低温', detail: `当前 ${fmt(current.temperature)}，注意保暖` })
   }
-  if (current.windSpeed >= 60) {
-    alerts.push({ key: 'wind', level: 'warning', title: '大风', detail: `风速 ${Math.round(current.windSpeed)} km/h` })
+  if (toKmh(current.windSpeed) >= WIND_KMH) {
+    alerts.push({ key: 'wind', level: 'warning', title: '大风', detail: `风速 ${Math.round(toKmh(current.windSpeed))} km/h` })
   }
   const code = current.weatherCode
-  if (code === 65 || code === 82 || code === 99) {
+  if (HEAVY_RAIN_CODES.has(code)) {
     alerts.push({ key: 'heavy-rain', level: 'danger', title: '强降雨', detail: '大雨或暴风雨，注意出行安全' })
-  } else if (code === 95 || code === 96) {
+  } else if (THUNDER_CODES.has(code)) {
     alerts.push({ key: 'thunder', level: 'danger', title: '雷暴', detail: '雷电天气，注意防范' })
   }
-  if (code === 75 || code === 86) {
+  if (HEAVY_SNOW_CODES.has(code)) {
     alerts.push({ key: 'heavy-snow', level: 'warning', title: '强降雪', detail: '大雪天气，注意路况' })
   }
+
+  // Lead-time tier: scan the next LEAD_HOURS hours (the first hourly point is
+  // the current hour, already covered by the current tier above).
+  const future = data.hourly.slice(1, 1 + LEAD_HOURS)
+  if (future.length > 0) {
+    const stormSoon = future.some((h) => STORM_CODES.has(h.weatherCode))
+    if (stormSoon && !hasKey('heavy-rain') && !hasKey('thunder')) {
+      alerts.push({
+        key: 'storm-soon',
+        level: 'danger',
+        title: '强降雨/雷暴',
+        detail: `未来 ${LEAD_HOURS} 小时可能有强降雨或雷暴，请留意天气变化`,
+      })
+    }
+    const heatMaxC = Math.max(...future.map((h) => toCelsius(h.temperature)))
+    if (heatMaxC >= HEAT_C && !hasKey('heat')) {
+      alerts.push({
+        key: 'heat-soon',
+        level: 'warning',
+        title: '高温',
+        detail: `未来 ${LEAD_HOURS} 小时最高可达 ${fmt(unit === '°F' ? (heatMaxC * 9) / 5 + 32 : heatMaxC)}，注意防暑`,
+      })
+    }
+    const coldMinC = Math.min(...future.map((h) => toCelsius(h.temperature)))
+    if (coldMinC <= COLD_C && !hasKey('cold')) {
+      alerts.push({
+        key: 'cold-soon',
+        level: 'warning',
+        title: '低温',
+        detail: `未来 ${LEAD_HOURS} 小时最低将降至 ${fmt(unit === '°F' ? (coldMinC * 9) / 5 + 32 : coldMinC)}，注意保暖`,
+      })
+    }
+    const windMaxKmh = Math.max(...future.map((h) => toKmh(h.windSpeed ?? 0)))
+    if (windMaxKmh >= WIND_KMH && !hasKey('wind')) {
+      alerts.push({
+        key: 'wind-soon',
+        level: 'warning',
+        title: '大风',
+        detail: `未来 ${LEAD_HOURS} 小时风力较大（最大 ${Math.round(windMaxKmh)} km/h），注意高空坠物`,
+      })
+    }
+    if (future.some((h) => HEAVY_SNOW_CODES.has(h.weatherCode)) && !hasKey('heavy-snow')) {
+      alerts.push({
+        key: 'snow-soon',
+        level: 'warning',
+        title: '强降雪',
+        detail: `未来 ${LEAD_HOURS} 小时可能有强降雪，注意路况`,
+      })
+    }
+  }
+
   return alerts
 }

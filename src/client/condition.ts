@@ -132,3 +132,50 @@ export function weatherAdvice(data: WeatherData): { icon: string; text: string }
   }
   return { icon: '🌤️', text: '天气平稳，适合日常出行' }
 }
+
+/** Short minute total like `45 分钟` / `1.5 小时` / `12 小时`. */
+export function durationLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} 分钟`
+  const hours = minutes / 60
+  if (hours >= 10) return `${Math.round(hours)} 小时`
+  return `${Math.round(hours * 2) / 2} 小时`
+}
+
+/**
+ * One-line summary of the upcoming rain, for the popover rain-strip header:
+ * `正在下雨，预计持续 45 分钟` / `约 30 分钟后开始下雨` / `近期无明显降雨`.
+ */
+export function rainTimingText(rain: { rainingNow: boolean; onsetMinutes?: number; durationMinutes?: number }): string {
+  if (rain.rainingNow) {
+    const duration = rain.durationMinutes
+    if (duration !== undefined && duration >= 15 && duration <= 180) {
+      return `正在下雨，预计持续 ${durationLabel(duration)}`
+    }
+    return '正在下雨'
+  }
+  const onset = rain.onsetMinutes
+  if (onset === undefined) return '近期无明显降雨'
+  if (onset <= 15) return '即将开始下雨'
+  const rounded = onset >= 180 ? `${Math.round(onset / 60)} 小时` : `${onset} 分钟`
+  return `约 ${rounded}后开始下雨`
+}
+
+/**
+ * Compact rain hint for the weather-bar subtitle — only shown when rain is
+ * imminent (currently falling, or starting within 2 h).
+ */
+export function rainSoonShortText(rain: { rainingNow: boolean; onsetMinutes?: number }): string | undefined {
+  if (rain.rainingNow) return '正在下雨'
+  const onset = rain.onsetMinutes
+  if (onset === undefined || onset > 120) return undefined
+  const rounded = Math.max(5, Math.round(onset / 5) * 5)
+  return `约 ${rounded} 分钟后有雨`
+}
+
+/** 8-point Chinese wind-direction label (`0°`→`北风`, `90°`→`东风`). */
+export function windDirectionText(degrees?: number): string | undefined {
+  if (degrees === undefined) return undefined
+  const names = ['北', '东北', '东', '东南', '南', '西南', '西', '西北']
+  const index = Math.round((((degrees % 360) + 360) % 360) / 45) % 8
+  return `${names[index]}风`
+}
