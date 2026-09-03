@@ -24,6 +24,8 @@
   },
   "files": [
     "lib",
+    "src",
+    "scripts",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -31,6 +33,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
     "check": "npm run typecheck && npm run build"
   },
   "dsh": {
