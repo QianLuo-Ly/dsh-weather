@@ -1,6 +1,10 @@
 packages:
   - .
 
+# Keep the pnpm content-addressable store under D:\DeepSeek Harness instead of
+# the pnpm per-drive default D:\.pnpm-store at the drive root.
+storeDir: D:/DeepSeek Harness/.pnpm-store
+
 allowBuilds:
   esbuild: true
 
