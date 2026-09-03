@@ -7,12 +7,10 @@
 import { useEffect, useState, type CSSProperties, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import { DEFAULT_WEATHER_CONFIG, type WeatherConfig } from '../config-shared'
-import { searchCity, type GeoLocation } from './weather-api'
+import { runLocationDiagnostics, searchCity, type GeoLocation, type LocationDiagnostics } from './weather-api'
 
 export interface WeatherSettingsSectionProps {
   scope: SettingsScope<WeatherConfig>
-  /** Shell-provided affordance to close the settings panel (may be absent). */
-  close?: () => void
 }
 
 // Text colors follow .dshw-root (pure white in dark mode, see styles.ts).
@@ -29,6 +27,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   const [suggestions, setSuggestions] = useState<GeoLocation[]>([])
   const [searching, setSearching] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [diag, setDiag] = useState<LocationDiagnostics | null>(null)
 
   useEffect(() => {
     const sync = (): void => setConfig(scope.getSnapshot().value)
@@ -229,13 +228,60 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
           当前连接为进程内模式，配置仅在本次会话生效。
         </div>
       )}
-      {props.close !== undefined && (
-        <button type="button" onClick={props.close} style={{ marginTop: 16, ...inputButton }}>
-          完成
-        </button>
-      )}
+
+      {/* Location diagnostics */}
+      <div style={{ marginTop: 20, fontSize: 12, lineHeight: '19px', color: MUTED, background: BG_ROW, border: `1px solid ${BORDER}`, borderRadius: 10, padding: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+          <span style={{ fontWeight: 600, color: FG }}>定位诊断</span>
+          <button
+            type="button"
+            onClick={() => {
+              setDiag(null)
+              void runLocationDiagnostics().then(setDiag)
+            }}
+            style={inputButton}
+          >
+            重新检测
+          </button>
+        </div>
+        <div>
+          配置坐标：
+          {effective.locationMode === 'manual'
+            ? `${effective.latitude?.toFixed(3) ?? '--'}, ${effective.longitude?.toFixed(3) ?? '--'}（手动：${effective.cityName ?? '未设置'}）`
+            : effective.autoLatitude !== undefined
+              ? `${effective.autoLatitude.toFixed(3)}, ${effective.autoLongitude?.toFixed(3)}（缓存：${effective.autoCityName ?? ''}）`
+              : '自动模式（尚未定位）'}
+        </div>
+        {diag !== null ? (
+          <>
+            <div>
+              浏览器 GPS：
+              {diag.gps.status === 'ok'
+                ? `${diag.gps.latitude?.toFixed(3)}, ${diag.gps.longitude?.toFixed(3)}${diag.gps.accuracy !== undefined ? `（精度 ±${Math.round(diag.gps.accuracy)} m）` : ''}`
+                : diag.gps.status}
+            </div>
+            <div>
+              IP 定位：
+              {diag.ip.status === 'ok'
+                ? `${diag.ip.city}（${diag.ip.latitude?.toFixed(3)}, ${diag.ip.longitude?.toFixed(3)}）`
+                : `失败 ${diag.ip.error ?? ''}`}
+            </div>
+            {diag.gpsIpDistanceKm !== undefined && <div>GPS ↔ IP 距离：{Math.round(diag.gpsIpDistanceKm)} km</div>}
+            <div>采用：{diag.chosen === 'gps' ? `GPS（${precisionLabel(diag.precision)}精度）` : diag.chosen === 'ip' ? 'IP（浏览器定位缺失或过粗）' : '无'}</div>
+          </>
+        ) : (
+          <div>点击"重新检测"查看 GPS / IP 各自的原始结果。</div>
+        )}
+      </div>
     </div>
   )
+}
+
+/** Chinese label for a browser-fix precision tier (see weather-api.ts). */
+function precisionLabel(precision: string | undefined): string {
+  if (precision === 'district') return '区级'
+  if (precision === 'city') return '市级'
+  return '未分级'
 }
 
 function Row(props: { label: string; children: ReactElement | string }): ReactElement {

@@ -12,6 +12,38 @@ export interface GeoLocation {
   latitude: number
   longitude: number
   source: 'ip' | 'gps' | 'manual' | 'search'
+  /** Browser-reported positioning radius in metres (populated for `gps` only). */
+  accuracy?: number
+}
+
+/**
+ * Browser Geolocation precision tiers, driven by `position.coords.accuracy`
+ * (the confidence radius in metres) rather than by agreement with IP. The
+ * browser fix fuses GPS + WiFi + cell-tower and is the only source precise
+ * enough for district-scale naming; IP geolocation stays city-level and is
+ * only used as the fallback when the fix is missing or too coarse.
+ *
+ * - `district` — accurate enough to label the 区 (light district precision).
+ * - `city`     — coordinate trusted for city naming, but not 区.
+ * - `unreliable` — too coarse or absent; fall back to city-level IP.
+ */
+export type LocationPrecision = 'district' | 'city' | 'unreliable'
+
+/** Accuracy (m) at or below which the browser fix is trusted to the 区 level. */
+// Conservative: city districts share long borders, so a fix only a ~1 km off
+// can land on the wrong side and label the neighbouring 区 (e.g. 天河 vs 黄埔).
+// Requiring a tighter radius means we claim the 区 only when the fix sits well
+// inside one district — prefer showing the (correct) city over a wrong district.
+export const DISTRICT_ACCURACY_M = 1_000
+/** Accuracy above which the browser fix is abandoned in favour of city-level IP. */
+export const CITY_ACCURACY_M = 10_000
+
+/** Map a browser-reported accuracy (m) to a precision tier. */
+export function precisionFromAccuracy(accuracy?: number): LocationPrecision {
+  if (accuracy === undefined) return 'unreliable'
+  if (accuracy <= DISTRICT_ACCURACY_M) return 'district'
+  if (accuracy <= CITY_ACCURACY_M) return 'city'
+  return 'unreliable'
 }
 
 export interface CurrentWeather {
@@ -194,21 +226,30 @@ export function cityLevelName(name: string): string {
 }
 
 /**
- * Compose `广东省广州市` from administrative parts: province + city, each
+ * Compose `广东省广州市黄埔区` from administrative parts: province + city
+ * (+ district when `includeDistrict` and the precision justifies it), each
  * kept with its own suffix, dropping a province that repeats the city
- * (直辖市). District-level precision is intentionally NOT shown — IP
- * geolocation can only be trusted at city level.
+ * (直辖市). District is only appended when the caller has a browser fix that
+ * is trustworthy at that scale — IP geolocation cannot resolve districts.
  */
-export function composeAddressName(address: ChineseAddress): string {
-  const { province, city } = address
-  if (city === undefined || city === '') return province ?? ''
+export function composeAddressName(address: ChineseAddress, includeDistrict = false): string {
+  const { province, city, district } = address
+  if (city === undefined || city === '') {
+    // 直辖市等只有省/市同名、且 locality 直接给出区的情形（如 北京市 + 朝阳区）。
+    if (includeDistrict
+      && province !== undefined && province !== ''
+      && district !== undefined && district !== '' && district !== province
+      && /市$/.test(province)) {
+      return `${province}${district}`
+    }
+    return province ?? ''
+  }
   const parts: string[] = []
   if (province !== undefined && province !== '' && province !== city) parts.push(province)
   parts.push(city)
-  // District (区) display is disabled: IP geolocation cannot resolve districts
-  // reliably, and weather is city-level anyway. Uncomment to re-enable:
-  // const { district } = address
-  // if (district !== undefined && district !== '' && district !== city) parts.push(district)
+  if (includeDistrict && district !== undefined && district !== '' && district !== city) {
+    parts.push(district)
+  }
   return parts.join('')
 }
 
@@ -267,6 +308,7 @@ export function resolveLocationByBrowser(): Promise<GeoLocation> {
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
           source: 'gps',
+          accuracy: position.coords.accuracy,
         })
       },
       (error) => {
@@ -305,52 +347,65 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null
 
 /** Raw results of one location-diagnostics pass (shown in the settings view). */
 export interface LocationDiagnostics {
-  gps: { status: 'ok' | 'error' | 'timeout'; latitude?: number; longitude?: number; error?: string }
+  gps: { status: 'ok' | 'error' | 'timeout'; latitude?: number; longitude?: number; accuracy?: number; error?: string }
   ip: { status: 'ok' | 'error'; city?: string; latitude?: number; longitude?: number; error?: string }
   gpsIpDistanceKm?: number
   chosen: 'gps' | 'ip' | 'none'
+  /** Precision tier of the chosen source (`gps` tier, or `none`). */
+  precision?: LocationPrecision
 }
 
 /**
  * Resolve the current location with a Chinese administrative display name.
  *
- * Positioning: the browser GPS and the IP location run in parallel. The IP
- * (ipwho.is, city-level) is the reliability anchor and usually returns within
- * a second; the GPS gets a short capped wait. GPS is trusted only when it
- * roughly agrees with the IP (within 50 km) — in environments where the
- * browser's location service is unreliable it can return wildly wrong fixes
- * (e.g. a Qingyuan reading for a Guangzhou network), and for weather the
- * city-level IP truth beats a garbage GPS reading.
+ * Positioning: the browser GPS/WiFi fix is the primary source. It fuses
+ * GPS + WiFi + cell-tower and is the only source precise enough for
+ * district-scale naming — we trust it at the 区 level when its reported
+ * accuracy is ≤ {@link DISTRICT_ACCURACY_M}, and at city level up to
+ * {@link CITY_ACCURACY_M}. IP geolocation (city-level) is only the fallback
+ * when the fix is missing or too coarse; this replaces the old "GPS must
+ * agree with IP within 50 km" rule, which wrongly discarded a good fix
+ * whenever a single mislabelled IP drifted (this network's egress rotates and
+ * mislabels the same connection as different cities).
  *
  * Naming: reverse geocode the coordinates to 省/市/区 (BigDataCloud,
  * simplified), Open-Meteo city-name localization as fallback.
  */
 export async function resolveAutoLocation(): Promise<GeoLocation> {
-  const gpsPromise = resolveLocationByBrowser()
-  const ipPromise = resolveLocationByIp()
-  const ipResult = await ipPromise
-  const gpsResult = await withTimeout(gpsPromise, 6_000)
+  // Keep a neutralised fallback alive so GPS not being needed doesn't leak an
+  // unhandled rejection (resolveLocationByIp throws when every provider fails).
+  const ipPromise = resolveLocationByIp().catch(() => null)
+  const gpsResult = await withTimeout(resolveLocationByBrowser(), 6_000)
 
-  let base: GeoLocation
-  if (gpsResult !== null && haversineKm(
-    gpsResult.latitude, gpsResult.longitude,
-    ipResult.latitude, ipResult.longitude,
-  ) <= 50) {
-    base = gpsResult
-  } else {
-    base = ipResult
+  const precision = gpsResult !== null ? precisionFromAccuracy(gpsResult.accuracy) : 'unreliable'
+  if (gpsResult !== null && precision !== 'unreliable') {
+    const name = await resolveDisplayName(gpsResult, precision)
+    return { ...gpsResult, name }
   }
-  let name = base.name
+
+  const ipResult = await ipPromise
+  if (ipResult === null) throw new Error('IP 定位服务不可用')
+  const name = await resolveDisplayName(ipResult, 'city')
+  return { ...ipResult, name }
+}
+
+/**
+ * Reverse-geocode a selected base to a Chinese display name. When the base is
+ * a browser fix trusted at {@link 'district'} precision the 区 is appended;
+ * city-level sources (or coarse fixes) keep the 省/市 form. Open-Meteo city
+ * name localization is used when reverse geocoding fails or returns nothing.
+ */
+async function resolveDisplayName(base: GeoLocation, precision: LocationPrecision): Promise<string> {
   try {
-    const composed = composeAddressName(await reverseGeocodeAddress(base.latitude, base.longitude))
-    if (composed !== '') name = composed
+    const composed = composeAddressName(
+      await reverseGeocodeAddress(base.latitude, base.longitude),
+      precision === 'district',
+    )
+    if (composed !== '') return composed
   } catch {
     // fall through to the Open-Meteo localization fallback below
   }
-  if (name === base.name) {
-    name = await localizeCityName(base)
-  }
-  return { ...base, name }
+  return localizeCityName(base)
 }
 
 /** Run one diagnostics pass over the positioning sources (for the UI). */
@@ -366,13 +421,14 @@ export async function runLocationDiagnostics(): Promise<LocationDiagnostics> {
     ip = { status: 'error', error: err instanceof Error ? err.message : String(err) }
   }
   const gps = gpsRaw !== null
-    ? { status: 'ok' as const, latitude: gpsRaw.latitude, longitude: gpsRaw.longitude }
+    ? { status: 'ok' as const, latitude: gpsRaw.latitude, longitude: gpsRaw.longitude, accuracy: gpsRaw.accuracy }
     : { status: 'timeout' as const }
   const distance = gpsRaw !== null && ip.status === 'ok'
     ? haversineKm(gpsRaw.latitude, gpsRaw.longitude, ip.latitude!, ip.longitude!)
     : undefined
-  const chosen = gpsRaw !== null && distance !== undefined && distance <= 50 ? 'gps' : ip.status === 'ok' ? 'ip' : 'none'
-  return { gps, ip, gpsIpDistanceKm: distance, chosen }
+  const precision = gpsRaw !== null ? precisionFromAccuracy(gpsRaw.accuracy) : 'unreliable'
+  const chosen = precision !== 'unreliable' ? 'gps' : ip.status === 'ok' ? 'ip' : 'none'
+  return { gps, ip, gpsIpDistanceKm: distance, chosen, precision: chosen === 'gps' ? precision : undefined }
 }
 
 /** Search cities by name (Chinese names supported via `language=zh`). */

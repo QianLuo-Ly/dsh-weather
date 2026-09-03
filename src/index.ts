@@ -27,6 +27,7 @@ export const WeatherConfigSchema = z.object({
   autoLatitude: z.number().min(-90).max(90).required(false),
   autoLongitude: z.number().min(-180).max(180).required(false),
   autoCityName: z.string().required(false),
+  autoSource: z.union([z.const('gps'), z.const('ip')]).required(false),
 })
 
 /** Defaults for callers that want a fresh config object. */

@@ -24,13 +24,17 @@ export function ensureWeatherStyles(): void {
     '  from { opacity: 0; transform: translate(-50%, 8px) scale(0.97); }',
     '  to { opacity: 1; transform: translate(-50%, 0) scale(1); }',
     '}',
-    // Plugin text colors: theme tokens by default, pure white in dark mode
-    // (the harness marks dark mode with body[data-ds-dark-theme]).
-    '.dshw-root {',
-    '  --dshw-fg: var(--dsw-alias-label-primary, #1f2328);',
-    '  --dshw-fg-muted: var(--dsw-alias-label-secondary, #5f6672);',
+    // Plugin text colors: dark text on the light palette, PURE WHITE in dark
+    // mode (the harness marks dark mode with body[data-ds-dark-theme]).
+    // Defined document-wide (not under .dshw-root) so both the weather bar and
+    // the settings page (rendered inside the DSH Settings panel, outside the
+    // bar's root) resolve them. Direct colors avoid a var()-chain that would
+    // become guaranteed-invalid if an alias token were ever missing.
+    ':root {',
+    '  --dshw-fg: #1f2328;',
+    '  --dshw-fg-muted: #5f6672;',
     '}',
-    'body[data-ds-dark-theme] .dshw-root {',
+    'body[data-ds-dark-theme] {',
     '  --dshw-fg: #ffffff;',
     '  --dshw-fg-muted: rgba(255, 255, 255, 0.8);',
     '}',

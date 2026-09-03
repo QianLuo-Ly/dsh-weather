@@ -36,6 +36,8 @@ export interface WeatherConfig {
   autoLongitude?: number
   /** Cached auto-resolved display name (set by the plugin, not user-editable). */
   autoCityName?: string
+  /** Cached auto-resolved source (`gps`/`ip`), so the badge stays truthful. */
+  autoSource?: 'gps' | 'ip'
 }
 
 /**

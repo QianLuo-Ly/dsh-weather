@@ -24,15 +24,12 @@ import {
   haversineKm,
   resolveAutoLocation,
   resolveLocationByIp,
-  runLocationDiagnostics,
   type GeoLocation,
-  type LocationDiagnostics,
   type WeatherData,
 } from './weather-api'
 import { aqiInfo, dayLabel, describeCondition, hourLabel, timeLabel, uvLevel, weatherAdvice } from './condition'
 import { Glyph, WeatherIcon } from './icons'
 import { TrendChart } from './TrendChart'
-import { WeatherSettingsSection } from './WeatherSettings'
 
 export interface WeatherBarProps {
   scope: SettingsScope<WeatherConfig>
@@ -61,10 +58,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const [data, setData] = useState<WeatherData | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
-  const [view, setView] = useState<'main' | 'settings'>('main')
   const [tick, setTick] = useState(0)
   const [relocateTick, setRelocateTick] = useState(0)
-  const [diag, setDiag] = useState<LocationDiagnostics | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
   // Set by the relocate/retry buttons so the NEXT locate pass bypasses the
   // cached auto location exactly once; cleared after that pass consumes it.
@@ -76,7 +71,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   const closePopover = (): void => {
     setOpen(false)
-    setView('main')
   }
 
   // Resolve the effective config: the stored section once the namespace is
@@ -139,10 +133,14 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             && effective.autoLatitude !== undefined
             && effective.autoLongitude !== undefined
             ? {
-                name: cityLevelName(effective.autoCityName ?? '') !== '' ? cityLevelName(effective.autoCityName ?? '') : '当前位置',
+                // Preserve the resolved name verbatim — it may already include a
+                // district (区) resolved from a trusted browser fix.
+                name: effective.autoCityName !== undefined && effective.autoCityName !== ''
+                  ? effective.autoCityName
+                  : '当前位置',
                 latitude: effective.autoLatitude,
                 longitude: effective.autoLongitude,
-                source: 'ip' as const,
+                source: effective.autoSource ?? 'ip',
               }
             : null
           loc = cached ?? await resolveAutoLocation()
@@ -153,6 +151,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             void scope.set('autoLatitude', loc.latitude)
             void scope.set('autoLongitude', loc.longitude)
             void scope.set('autoCityName', loc.name)
+            void scope.set('autoSource', loc.source)
           } else {
             // Sanity-heal a stale or wrong cached location: if a fresh IP
             // consensus disagrees with the cache, clear it so the next pass
@@ -162,10 +161,16 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             // tighter than typical inter-city distances).
             void resolveLocationByIp().then((ip) => {
               if (cancelled) return
+              // Only sanity-heal IP-derived caches against a fresh IP consensus.
+              // A GPS-derived cache was already validated by its accuracy at
+              // resolve time, and this network's IP drifts too wildly to be a
+              // reliable check against it.
+              if (cached.source === 'gps') return
               if (haversineKm(cached.latitude, cached.longitude, ip.latitude, ip.longitude) > 50) {
                 void scope.unset('autoLatitude')
                 void scope.unset('autoLongitude')
                 void scope.unset('autoCityName')
+                void scope.unset('autoSource')
               }
             }).catch(() => {})
           }
@@ -327,10 +332,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
       <button
         type="button"
         className="dshw-bar"
-        onClick={() => setOpen((v) => {
-          if (v) setView('main')
-          return !v
-        })}
+        onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         title="天气详情"
         style={{
@@ -422,59 +424,15 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             textAlign: 'left',
           }}
         >
-          {view === 'settings' ? (
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
-                <button type="button" onClick={() => setView('main')} style={iconButton} title="返回">
-                  <Glyph name="chevron-left" size={16} />
-                </button>
-                <span style={{ fontSize: 15, fontWeight: 600 }}>天气设置</span>
-              </div>
-              <WeatherSettingsSection scope={scope} />
-
-              {/* Location diagnostics */}
-              <div style={{ marginTop: 14, fontSize: 12, lineHeight: '18px', color: TOKEN.fgMuted, background: TOKEN.bgSoft, borderRadius: 10, padding: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 600, color: TOKEN.fg }}>定位诊断</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDiag(null)
-                      void runLocationDiagnostics().then(setDiag)
-                    }}
-                    style={actionButton}
-                  >
-                    重新检测
-                  </button>
-                </div>
-                <div>
-                  当前：{name}
-                  {location !== null && `（${location.latitude.toFixed(3)}, ${location.longitude.toFixed(3)}）`}
-                  {location !== null && ` · ${location.source === 'gps' ? 'GPS' : 'IP'}`}
-                </div>
-                {diag !== null ? (
-                  <>
-                    <div>浏览器 GPS：{diag.gps.status === 'ok' ? `${diag.gps.latitude?.toFixed(3)}, ${diag.gps.longitude?.toFixed(3)}` : diag.gps.status}</div>
-                    <div>IP 定位：{diag.ip.status === 'ok' ? `${diag.ip.city}（${diag.ip.latitude?.toFixed(3)}, ${diag.ip.longitude?.toFixed(3)}）` : `失败 ${diag.ip.error ?? ''}`}</div>
-                    {diag.gpsIpDistanceKm !== undefined && <div>GPS ↔ IP 距离：{Math.round(diag.gpsIpDistanceKm)} km</div>}
-                    <div>采用：{diag.chosen === 'gps' ? 'GPS（与 IP 一致）' : diag.chosen === 'ip' ? 'IP（GPS 缺失或偏离过大）' : '无'}</div>
-                  </>
-                ) : (
-                  <div>点击"重新检测"查看 GPS / IP 各自的原始结果。</div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <>
-              {status === 'error' && (
-                <div style={{ marginBottom: 10 }}>
-                  <div style={{ color: TOKEN.danger }}>{error ?? '加载失败'}</div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      bypassCacheRef.current = true
-                      setRelocateTick((n) => n + 1)
-                    }}
+          {status === 'error' && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ color: TOKEN.danger }}>{error ?? '加载失败'}</div>
+              <button
+                type="button"
+                onClick={() => {
+                  bypassCacheRef.current = true
+                  setRelocateTick((n) => n + 1)
+                }}
                     style={actionButton}
                   >
                     ⟳ 重试
@@ -676,13 +634,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                         📍 重新定位
                       </button>
                     )}
-                    <button
-                      type="button"
-                      onClick={() => setView('settings')}
-                      style={{ ...actionButton, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 5 }}
-                    >
-                      <Glyph name="sliders" size={13} /> 设置
-                    </button>
                   </div>
                 </>
               )}
@@ -692,8 +643,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                   {status === 'idle' ? '尚未启用' : '天气加载中…'}
                 </div>
               )}
-            </>
-          )}
         </div>
       )}
     </div>
