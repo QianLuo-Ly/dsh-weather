@@ -21,7 +21,7 @@ cd <deepseek-harness-checkout>
 pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 ```
 
-重启 `dsh web`，刷新页面即可看到顶部天气栏。
+重启 `dsh web`，刷新页面，进入会话即可在顶部操作行看到天气 chip。
 
 > 提示：本机 pnpm 版本若与 profile 的 node_modules 布局不一致，会在
 > `~/.dsh/profiles/web/.npmrc` 里加一行 `virtual-store-dir-max-length=120`。
@@ -49,8 +49,8 @@ cordis.patch.yml      # 向 profile bundle 层栈插入 dsh-weather 条目
 src/index.ts          # Host 半侧：settings namespace 注册
 src/config-shared.ts  # 共享配置类型（Host 与浏览器共用，浏览器侧内联）
 src/client/           # 浏览器半侧
-  index.tsx           #   apply：注册 shell.overlay（天气栏）+ settings.section（配置页）
-  WeatherBar.tsx      #   顶部居中天气栏 + 详情弹层
+  index.tsx           #   apply：注册 conversation.session.header.actions（天气 chip）+ settings.section（配置页）
+  WeatherBar.tsx      #   会话顶栏天气 chip + 详情弹层（conversation.session.header.actions）
   WeatherSettings.tsx #   设置页表单
   weather-api.ts      #   Open-Meteo 预报 / 城市搜索 + geojs.io IP 定位
   condition.ts        #   WMO 天气编码 → 中文文案 + emoji

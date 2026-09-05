@@ -1,11 +1,13 @@
 /**
  * dsh-weather — browser half.
  *
- * Registers the top-center weather bar into `shell.overlay` (declared by
- * ui-layout) and the configuration page into `settings.section` (declared by
- * ui-settings) — the page appears under the Settings panel (bottom-left gear).
- * Both registrations ride `ctx.slots.inject`, so they wait for the
- * declarations to mount and unwind when this plugin unloads.
+ * Registers a compact weather chip into `conversation.session.header.actions`
+ * (declared by ui-conversation) — an app-layout seat inside the session
+ * header, so the chip never floats over or collides with other plugins'
+ * overlay controls — and the configuration page into `settings.section`
+ * (declared by ui-settings), which appears under the Settings panel
+ * (bottom-left gear). Both registrations ride `ctx.slots.inject`, so they
+ * wait for the declarations to mount and unwind when this plugin unloads.
  *
  * Services required by cordis: `slots` (ui-slots) and `settingsScope`
  * (ui-settings). The module-table row for `@deepseek-ai/dsh-client-ui-settings`
@@ -13,8 +15,10 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only SlotMap merges: the slot keys below must exist on the shared
-// `SlotMap` for the register calls to type-check.
-import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// `SlotMap` for the register calls to type-check. ui-conversation is a core
+// seat of the running shell but not a compile-time dependency here, so the
+// seat key is declared locally in `slotmap.d.ts` (same augmentation pattern
+// the core packages use).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { WEATHER_NS, type WeatherConfig } from '../config-shared'
 import { WeatherBar } from './WeatherBar'
@@ -32,10 +36,10 @@ export function apply(ctx: Context): void {
     decode: (section) => section as WeatherConfig | undefined,
   })
 
-  ctx.slots.inject('shell.overlay', () => ctx.slots.register({
-    name: 'shell.overlay',
-    id: 'dsh-weather',
-    order: 60,
+  ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
+    name: 'conversation.session.header.actions',
+    id: 'weather',
+    order: 30,
     inject: () => ({ scope }),
   }, WeatherBar))
 

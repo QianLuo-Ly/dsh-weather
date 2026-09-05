@@ -10,7 +10,7 @@ export const WEATHER_NS = 'weather'
 
 /** Durable, user-facing weather plugin configuration. */
 export interface WeatherConfig {
-  /** Whether the top-center weather bar is visible. */
+  /** Whether the weather chip in the conversation header is visible. */
   enabled: boolean
   /**
    * Location resolution mode:

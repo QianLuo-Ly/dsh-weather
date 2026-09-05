@@ -1,10 +1,17 @@
 /**
- * Top-center weather bar. Registered into the `shell.overlay` slot by the
- * browser half: a compact pill (location + current condition) with a
- * click-to-open popover holding the current-weather hero, stat chips, the
- * 24h temperature trend, the hourly strip, the 7-day forecast, and the
- * unit / refresh controls. Icons are Feather-style SVGs; the pill closes on
- * outside clicks or Escape.
+ * Session-header weather chip. Registered into the app-reserved
+ * `conversation.session.header.actions` seat (not a floating overlay), so it
+ * sits in the conversation column's own chrome row and can never collide with
+ * other plugins' floating controls (sidebars, whales, status pills…).
+ *
+ * Collapsed it is one compact chip — weather icon, temperature, and a live
+ * date/time (minute-aligned clock) — that is always visible while a session
+ * is open, expanded or not. Clicking it opens a popover (anchored to the chip,
+ * aligned away from the edge with the least room) holding the location header,
+ * current-weather hero, stat chips, the 24h temperature trend, the hourly
+ * strip, the 7-day forecast, and the unit / refresh controls. Details that
+ * used to live on the pill itself (体感温度, rain/alert hints) live in the
+ * popover or the browser notifications, keeping the header row lean.
  *
  * The popover lays out in two balanced columns so everything fits one screen
  * without a scrollbar on typical viewports (a scrollbar only appears as a
@@ -28,7 +35,7 @@ import {
   type GeoLocation,
   type WeatherData,
 } from './weather-api'
-import { aqiInfo, dayLabel, describeCondition, hourLabel, rainSoonShortText, rainTimingText, timeLabel, uvLevel, weatherAdvice, windDirectionText } from './condition'
+import { aqiInfo, dayLabel, describeCondition, hourLabel, rainTimingText, timeLabel, uvLevel, weatherAdvice, windDirectionText } from './condition'
 import { Glyph, WeatherIcon } from './icons'
 import { TrendChart } from './TrendChart'
 
@@ -61,6 +68,11 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const [open, setOpen] = useState(false)
   const [tick, setTick] = useState(0)
   const [relocateTick, setRelocateTick] = useState(0)
+  // Live local clock driving the always-visible date/time text in the chip.
+  const [now, setNow] = useState<Date>(() => new Date())
+  // Popover geometry measured when the chip opens: which side to grow from and
+  // how wide it may be before touching the viewport edge.
+  const [pop, setPop] = useState<{ align: 'start' | 'end'; width: number } | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
   // Set by the relocate/retry buttons so the NEXT locate pass bypasses the
   // cached auto location exactly once; cleared after that pass consumes it.
@@ -77,6 +89,25 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   const closePopover = (): void => {
     setOpen(false)
+  }
+
+  // Toggle the popover. On open, measure the chip's viewport position once and
+  // let the popover grow from the side with more room, capped so it never runs
+  // past the edge.
+  const togglePopover = (): void => {
+    const next = !open
+    if (next && barRef.current !== null) {
+      const rect = barRef.current.getBoundingClientRect()
+      const gap = 16
+      const rightRoom = window.innerWidth - rect.right - gap
+      const leftRoom = rect.left - gap
+      if (rightRoom >= leftRoom) {
+        setPop({ align: 'start', width: Math.min(560, Math.max(280, rect.width + rightRoom)) })
+      } else {
+        setPop({ align: 'end', width: Math.min(560, Math.max(280, rect.width + leftRoom)) })
+      }
+    }
+    setOpen(next)
   }
 
   // Resolve the effective config: the stored section once the namespace is
@@ -255,6 +286,19 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     return () => window.clearInterval(id)
   }, [effective.refreshMinutes, effective.enabled])
 
+  // Live clock for the chip's date/time text: re-render exactly once per
+  // minute, aligned to the minute boundary (no per-second churn, and the
+  // displayed HH:MM is fresh right when the minute rolls over).
+  useEffect(() => {
+    let timer = 0
+    const refresh = (): void => {
+      setNow(new Date())
+      timer = window.setTimeout(refresh, 60_000 - (Date.now() % 60_000) + 20)
+    }
+    timer = window.setTimeout(refresh, 60_000 - (Date.now() % 60_000) + 20)
+    return () => window.clearTimeout(timer)
+  }, [])
+
   // Ask for notification permission once when alerts are enabled.
   useEffect(() => {
     if (effective.alertsEnabled && typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -328,27 +372,33 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     ? describeCondition(data.current.weatherCode, data.current.isDay)
     : null
   const name = location?.name ?? (effective.locationMode === 'manual' ? (effective.cityName ?? '当前位置') : '定位中…')
+  const nowTime = clockTime(now)
+  const nowDate = clockDate(now)
 
-  // Short "rain incoming" hint for the pill subtitle (only when not already
-  // raining — an active shower is already visible from the condition itself).
-  const rainShort = data?.rainSoon !== undefined && !data.rainSoon.rainingNow
-    ? rainSoonShortText(data.rainSoon)
-    : undefined
-
-  const subText = status === 'locating'
+  // Single-line pill copy: `城市 · 状态/天气`。体感等细节只留在弹层，收起态不再
+  // 重复第二行副标题，pill 因此保持一行高度。
+  // Text shown in the chip while weather is not ready yet (temp takes its place
+  // once `ready`); keeps the chip meaningful during locating / loading / error.
+  const busyText = status === 'locating'
     ? '定位中…'
     : status === 'loading'
       ? '加载中…'
       : status === 'error'
-        ? '⚠ 加载失败'
-        : data !== null && condition !== null
-          ? `${condition.label} · 体感 ${fmt(data.current.apparentTemperature)}${rainShort !== undefined ? ` · ☔ ${rainShort}` : ''}`
-          : ''
+        ? '加载失败'
+        : null
 
   const showTemp = status === 'ready' && data !== null
   const barIcon = status === 'ready' && data !== null
-    ? <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={20} />
-    : <Glyph name="pin" size={18} />
+    ? <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={17} />
+    : <Glyph name="pin" size={15} />
+
+  // Chip tooltip: full context at a glance without widening the header chip.
+  const chipTitle = [
+    name,
+    showTemp && condition !== null ? condition.label : undefined,
+    showTemp ? fmt(data!.current.temperature) : undefined,
+    `${nowDate} ${nowTime}`,
+  ].filter((part): part is string => typeof part === 'string').join(' · ')
 
   const weekly = data?.daily ?? []
   const weekMin = weekly.length > 0 ? Math.min(...weekly.map((d) => d.tempMin)) : 0
@@ -384,33 +434,29 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
       ref={barRef}
       className="dshw-root"
       style={{
-        position: 'fixed',
-        top: 10,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 60,
-        animation: 'dshw-slide-in 0.25s ease',
+        position: 'relative',
+        display: 'inline-flex',
+        fontSize: 13,
       }}
     >
       <button
         type="button"
         className="dshw-bar"
-        onClick={() => setOpen((v) => !v)}
+        onClick={togglePopover}
         aria-expanded={open}
-        title="天气详情"
+        title={chipTitle}
         style={{
           ...baseButton,
           display: 'flex',
-          alignItems: 'center',
-          gap: 10,
-          background: TOKEN.bg,
+          alignItems: 'baseline',
+          gap: 6,
+          background: TOKEN.bgSoft,
           color: TOKEN.fg,
           border: `1px solid ${TOKEN.border}`,
           borderRadius: 999,
-          padding: '5px 14px 5px 6px',
-          boxShadow: '0 6px 24px rgba(0, 0, 0, 0.16)',
+          padding: '3px 10px 3px 5px',
           cursor: 'pointer',
-          maxWidth: 'min(640px, 76vw)',
+          maxWidth: 'min(280px, 42vw)',
           textAlign: 'left',
         }}
       >
@@ -420,62 +466,62 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            width: 30,
-            height: 30,
+            width: 24,
+            height: 24,
             borderRadius: '50%',
-            background: TOKEN.bgSoft,
+            background: TOKEN.bg,
             border: `1px solid ${TOKEN.border}`,
             color: TOKEN.fg,
+            alignSelf: 'center',
           }}
         >
           {barIcon}
         </span>
-        <span style={{ display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: '1 1 auto' }}>
-          <span style={{ fontSize: 13, fontWeight: 600, lineHeight: '17px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {name}
+        {showTemp ? (
+          <>
+            <span style={{ fontSize: 17, fontWeight: 700, lineHeight: '22px', ...NUM, flex: '0 0 auto' }}>
+              {fmt(data!.current.temperature)}
+            </span>
+            {condition !== null && (
+              <span style={{ fontSize: 14, lineHeight: '20px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', flex: '0 0 auto' }}>
+                {condition.label}
+              </span>
+            )}
+          </>
+        ) : busyText !== null ? (
+          <span style={{ fontSize: 14, lineHeight: '20px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', ...(status === 'error' ? { color: TOKEN.danger } : {}) }}>
+            {busyText}
           </span>
-          <span style={{ fontSize: 11.5, lineHeight: '15px', color: TOKEN.fgMuted, ...(status === 'error' ? { color: TOKEN.danger } : {}) }}>
-            {subText}
-          </span>
-        </span>
-        {alerts.length > 0 && (
-          <span
-            title={alerts.map((a) => `${a.title}：${a.detail}`).join('；')}
-            style={{
-              flex: '0 0 auto',
-              fontSize: 11,
-              fontWeight: 700,
-              lineHeight: '17px',
-              color: hasDanger ? '#d5484d' : '#b45309',
-              background: hasDanger ? 'rgba(213, 72, 77, 0.12)' : 'rgba(180, 83, 9, 0.12)',
-              borderRadius: 999,
-              padding: '1px 9px',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            ⚠ {alerts[0].title}
-          </span>
-        )}
-        {showTemp && (
-          <span style={{ fontSize: 18, fontWeight: 700, lineHeight: '22px', ...NUM, flex: '0 0 auto' }}>
-            {fmt(data!.current.temperature)}
-          </span>
-        )}
-        <span style={{ flex: '0 0 auto', fontSize: 10, color: TOKEN.fgMuted, marginLeft: 2 }}>
-          {open ? '▾' : '▸'}
+        ) : null}
+        {/* Live date & time — always visible on the chip, whether the popover
+            is collapsed or expanded. */}
+        <span
+          style={{
+            flex: '0 0 auto',
+            fontSize: 14,
+            lineHeight: '20px',
+            color: TOKEN.fgMuted,
+            whiteSpace: 'nowrap',
+            paddingLeft: 8,
+            borderLeft: `1px solid ${TOKEN.border}`,
+            ...NUM,
+          }}
+        >
+          {nowDate} {nowTime}
         </span>
       </button>
 
-      {open && (
+      {open && pop !== null && (
         <div
           className="dshw-popover"
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-            width: 'min(600px, 94vw)',
-            maxHeight: 'calc(100vh - 48px)',
+            zIndex: 60,
+            ...(pop.align === 'start' ? { left: 0 } : { right: 0 }),
+            width: pop.width,
+            maxWidth: 'calc(100vw - 24px)',
+            maxHeight: 'calc(100vh - 150px)',
             overflowY: 'auto',
             background: TOKEN.bg,
             color: TOKEN.fg,
@@ -775,6 +821,17 @@ function hhmm(millis: number): string {
   const date = new Date(millis)
   const pad = (n: number): string => String(n).padStart(2, '0')
   return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** `HH:MM` (24 h) for a Date — the chip clock time. */
+function clockTime(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** `7月5日` for a Date — the chip clock date (kept short for the header row). */
+function clockDate(date: Date): string {
+  return `${date.getMonth() + 1}月${date.getDate()}日`
 }
 
 /**

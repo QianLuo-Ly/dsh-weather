@@ -1,8 +1,9 @@
 /**
- * Tiny stylesheet injected once by the client plugin: entrance animations and
- * hover transitions referenced by `className` in the components. The plugin
- * bundle has no CSS pipeline, so the styles live in an injected `<style>` tag
- * owned by this package (removed with the plugin's DOM effects on unload).
+ * Tiny stylesheet injected once by the client plugin: the popover entrance
+ * animation and hover transitions referenced by `className` in the components.
+ * The plugin bundle has no CSS pipeline, so the styles live in an injected
+ * `<style>` tag owned by this package (removed with the plugin's DOM effects
+ * on unload).
  */
 /** Ensure the `dsh-weather-styles` stylesheet exists in the document. */
 export function ensureWeatherStyles(): void {
@@ -13,22 +14,15 @@ export function ensureWeatherStyles(): void {
   const style = document.createElement('style')
   style.id = id
   style.textContent = [
-    '@keyframes dshw-slide-in {',
-    '  from { opacity: 0; transform: translate(-50%, -10px); }',
-    '  to { opacity: 1; transform: translate(-50%, 0); }',
-    '}',
-    // Keep translate(-50%) from the element's inline centering transform
-    // throughout the animation — dropping it would shift the popover right
-    // for the duration and then snap it back to center.
     '@keyframes dshw-pop-in {',
-    '  from { opacity: 0; transform: translate(-50%, 8px) scale(0.97); }',
-    '  to { opacity: 1; transform: translate(-50%, 0) scale(1); }',
+    '  from { opacity: 0; transform: translateY(8px) scale(0.97); }',
+    '  to { opacity: 1; transform: translateY(0) scale(1); }',
     '}',
     // Plugin text colors: dark text on the light palette, PURE WHITE in dark
     // mode (the harness marks dark mode with body[data-ds-dark-theme]).
-    // Defined document-wide (not under .dshw-root) so both the weather bar and
+    // Defined document-wide (not under .dshw-root) so both the weather chip and
     // the settings page (rendered inside the DSH Settings panel, outside the
-    // bar's root) resolve them. Direct colors avoid a var()-chain that would
+    // chip's root) resolve them. Direct colors avoid a var()-chain that would
     // become guaranteed-invalid if an alias token were ever missing.
     ':root {',
     '  --dshw-fg: #1f2328;',
@@ -38,8 +32,10 @@ export function ensureWeatherStyles(): void {
     '  --dshw-fg: #ffffff;',
     '  --dshw-fg-muted: rgba(255, 255, 255, 0.8);',
     '}',
-    '.dshw-bar { transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease; }',
-    '.dshw-bar:hover { transform: translateY(-1px); filter: brightness(1.08); }',
+    // The chip lives inside the conversation header, so hover only brightens —
+    // a translate would nudge the header row mid-layout.
+    '.dshw-bar { transition: filter 0.15s ease, background-color 0.15s ease; }',
+    '.dshw-bar:hover { filter: brightness(1.08); }',
     '.dshw-popover { animation: dshw-pop-in 0.15s ease; }',
   ].join('\n')
   document.head.appendChild(style)

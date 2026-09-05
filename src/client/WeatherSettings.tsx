@@ -72,7 +72,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     <div style={{ maxWidth: 560, padding: '4px 0 20px', color: FG }}>
       <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>天气</div>
       <div style={{ color: MUTED, fontSize: 12.5, marginBottom: 16 }}>
-        顶部居中的天气栏（数据来源：Open-Meteo，无需 API key）。
+        会话顶部操作行的天气 chip（数据来源：Open-Meteo，无需 API key）。
       </div>
 
       <Row label="显示天气栏">
