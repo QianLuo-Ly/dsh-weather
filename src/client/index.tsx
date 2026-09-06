@@ -20,7 +20,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // seat key is declared locally in `slotmap.d.ts` (same augmentation pattern
 // the core packages use).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { WEATHER_NS, type WeatherConfig } from '../config-shared'
+import { sanitizeConfig, WEATHER_NS, type WeatherConfig } from '../config-shared'
 import { WeatherBar } from './WeatherBar'
 import { WeatherSettingsSection } from './WeatherSettings'
 import { ensureWeatherStyles } from './styles'
@@ -33,9 +33,16 @@ export function apply(ctx: Context): void {
   ensureWeatherStyles()
   const scope = ctx.settingsScope.bind<WeatherConfig>({
     namespace: WEATHER_NS,
-    decode: (section) => section as WeatherConfig | undefined,
+    // The stored section can be hand-edited or written by an older schema
+    // version — normalize every snapshot to a structurally valid config so a
+    // missing field (e.g. `refreshMinutes`) can never surface as NaN upstream.
+    decode: (section) => sanitizeConfig(section as Partial<WeatherConfig> | undefined),
   })
 
+  // Seat orders are relative within each slot — see ui-conversation /
+  // ui-settings for the other registered entries. Keep these two deliberate:
+  // the chip (30) sits among the header actions; the settings section (90)
+  // stays below the more commonly used sections.
   ctx.slots.inject('conversation.session.header.actions', () => ctx.slots.register({
     name: 'conversation.session.header.actions',
     id: 'weather',

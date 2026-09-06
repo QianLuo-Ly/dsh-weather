@@ -8,6 +8,7 @@
 pnpm install     # 安装 devDependencies
 pnpm typecheck   # tsc 类型检查
 pnpm build       # 产出 lib/index.js（Host）+ lib/client.js（浏览器 bundle）
+pnpm check:lib-sync  # 校验已提交的 lib/ 与当前 src/ 一致（改动 src/ 后必跑）
 ```
 
 ## 本地开发安装
@@ -46,15 +47,23 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 ```
 package.json          # dsh.bundle.patch + dsh.client（platform web, inject ui-settings）
 cordis.patch.yml      # 向 profile bundle 层栈插入 dsh-weather 条目
-src/index.ts          # Host 半侧：settings namespace 注册
-src/config-shared.ts  # 共享配置类型（Host 与浏览器共用，浏览器侧内联）
+src/index.ts          # Host 半侧：settings namespace 注册（schema 边界与 config-shared 共享）
+src/config-shared.ts  # 共享配置类型 + 默认值 + 范围常量 + sanitizeConfig（Host 与浏览器共用，浏览器侧内联）
+src/dsh-settings.d.ts # 本地 ctx.settings 类型 shim（见文件内注释）
 src/client/           # 浏览器半侧
   index.tsx           #   apply：注册 conversation.session.header.actions（天气 chip）+ settings.section（配置页）
-  WeatherBar.tsx      #   会话顶栏天气 chip + 详情弹层（conversation.session.header.actions）
-  WeatherSettings.tsx #   设置页表单
-  weather-api.ts      #   Open-Meteo 预报 / 城市搜索 + geojs.io IP 定位
-  condition.ts        #   WMO 天气编码 → 中文文案 + emoji
-scripts/build.mjs     # esbuild 构建脚本
+  WeatherBar.tsx      #   chip + 详情弹层主组件（数据生命周期 / 交互）
+  panels.tsx          #   弹层纯展示块（stat/rain/hourly/daily/facts）
+  WeatherSettings.tsx #   设置页表单（本地草稿 + blur 提交校验）
+  weather-api.ts      #   数据层：公制抓取、超时/取消、IP 共识定位、中文地理编码、告警评估
+  condition.ts        #   WMO 分类/阈值单一源 + 中文文案 + 时间格式化
+  units.ts            #   显示单位换算（°F/mph），数据层保持公制
+  theme.ts            #   设计 token / 调色板单一源
+  styles.ts           #   注入的少量全局样式
+  icons.tsx           #   WMO → SVG 图标 + 通用小图标
+  TrendChart.tsx      #   24h 温度 SVG 折线
+scripts/build.mjs     # esbuild 构建脚本（委托 build-lib.mjs）
+scripts/check-lib-sync.mjs  # 校验 lib/ 与 src/ 同步
 ```
 
 ## 发布与收录

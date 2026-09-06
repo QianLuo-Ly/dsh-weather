@@ -5,10 +5,7 @@
  * No gradients, no shared defs — safe to render many instances at once.
  */
 import type { ReactElement } from 'react'
-
-const SUN = '#fbbf24'
-const RAIN = '#60a5fa'
-const LIGHTNING = '#fbbf24'
+import { PALETTE } from './theme'
 
 /** Feather cloud (upper area). */
 const CLOUD = 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z'
@@ -17,7 +14,7 @@ const CLOUD_LOW = 'M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25'
 
 function Sun(): ReactElement {
   return (
-    <g stroke={SUN}>
+    <g stroke={PALETTE.sun}>
       <circle cx="12" cy="12" r="5" />
       <line x1="12" y1="1" x2="12" y2="3" />
       <line x1="12" y1="21" x2="12" y2="23" />
@@ -42,10 +39,10 @@ function Cloud(): ReactElement {
 function CloudSun(): ReactElement {
   return (
     <>
-      <path d="M12 2v2" stroke={SUN} />
-      <path d="m4.93 4.93 1.41 1.41" stroke={SUN} />
-      <path d="M20 12h2" stroke={SUN} />
-      <path d="m19.07 4.93-1.41 1.41" stroke={SUN} />
+      <path d="M12 2v2" stroke={PALETTE.sun} />
+      <path d="m4.93 4.93 1.41 1.41" stroke={PALETTE.sun} />
+      <path d="M20 12h2" stroke={PALETTE.sun} />
+      <path d="m19.07 4.93-1.41 1.41" stroke={PALETTE.sun} />
       <path d="M15.95 8.05a5 5 0 0 0-7.9 6.95" />
       <path d={CLOUD} />
     </>
@@ -75,9 +72,9 @@ function Drizzle(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v2" stroke={RAIN} />
-      <path d="M12 19v2" stroke={RAIN} />
-      <path d="M16 19v2" stroke={RAIN} />
+      <path d="M8 19v2" stroke={PALETTE.rain} />
+      <path d="M12 19v2" stroke={PALETTE.rain} />
+      <path d="M16 19v2" stroke={PALETTE.rain} />
     </>
   )
 }
@@ -86,9 +83,9 @@ function Rain(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v3" stroke={RAIN} />
-      <path d="M12 19v3" stroke={RAIN} />
-      <path d="M16 19v3" stroke={RAIN} />
+      <path d="M8 19v3" stroke={PALETTE.rain} />
+      <path d="M12 19v3" stroke={PALETTE.rain} />
+      <path d="M16 19v3" stroke={PALETTE.rain} />
     </>
   )
 }
@@ -97,10 +94,10 @@ function HeavyRain(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M7.5 19v3.5" stroke={RAIN} />
-      <path d="M10.5 18.5v3.5" stroke={RAIN} />
-      <path d="M13.5 19v3.5" stroke={RAIN} />
-      <path d="M16.5 18.5v3.5" stroke={RAIN} />
+      <path d="M7.5 19v3.5" stroke={PALETTE.rain} />
+      <path d="M10.5 18.5v3.5" stroke={PALETTE.rain} />
+      <path d="M13.5 19v3.5" stroke={PALETTE.rain} />
+      <path d="M16.5 18.5v3.5" stroke={PALETTE.rain} />
     </>
   )
 }
@@ -123,8 +120,8 @@ function Sleet(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v2" stroke={RAIN} />
-      <path d="M16 19v2" stroke={RAIN} />
+      <path d="M8 19v2" stroke={PALETTE.rain} />
+      <path d="M16 19v2" stroke={PALETTE.rain} />
       <path d="M12 18.5v3" />
       <path d="M10.5 20h3" />
     </>
@@ -135,7 +132,7 @@ function Thunder(): ReactElement {
   return (
     <>
       <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
-      <polyline points="13 11 9 17 15 17 11 23" stroke={LIGHTNING} fill="none" />
+      <polyline points="13 11 9 17 15 17 11 23" stroke={PALETTE.sun} fill="none" />
     </>
   )
 }
@@ -144,7 +141,7 @@ function ThunderHail(): ReactElement {
   return (
     <>
       <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
-      <polyline points="13 11 9 17 15 17 11 23" stroke={LIGHTNING} fill="none" />
+      <polyline points="13 11 9 17 15 17 11 23" stroke={PALETTE.sun} fill="none" />
       <circle cx="7" cy="21" r="1" fill="currentColor" stroke="none" />
       <circle cx="11" cy="22" r="1" fill="currentColor" stroke="none" />
       <circle cx="15" cy="21" r="1" fill="currentColor" stroke="none" />
@@ -202,7 +199,7 @@ export function WeatherIcon(props: { code: number; isDay: boolean; size?: number
   )
 }
 
-export type GlyphName = 'droplet' | 'wind' | 'umbrella' | 'refresh' | 'pin' | 'sunrise' | 'sunset' | 'sun' | 'sliders' | 'chevron-left' | 'cloud' | 'eye' | 'gauge'
+export type GlyphName = 'droplet' | 'wind' | 'umbrella' | 'refresh' | 'pin' | 'sunrise' | 'sunset' | 'sun' | 'cloud' | 'eye' | 'gauge'
 
 /** Small utility glyphs used inside the popover. */
 export function Glyph(props: { name: GlyphName; size?: number }): ReactElement {
@@ -253,33 +250,8 @@ export function Glyph(props: { name: GlyphName; size?: number }): ReactElement {
         <polyline points="16 5 12 9 8 5" />
       </g>
     ),
-    sun: (
-      <g>
-        <circle cx="12" cy="12" r="5" />
-        <line x1="12" y1="1" x2="12" y2="3" />
-        <line x1="12" y1="21" x2="12" y2="23" />
-        <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
-        <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
-        <line x1="1" y1="12" x2="3" y2="12" />
-        <line x1="21" y1="12" x2="23" y2="12" />
-        <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
-        <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
-      </g>
-    ),
-    sliders: (
-      <g>
-        <line x1="4" y1="21" x2="4" y2="14" />
-        <line x1="4" y1="10" x2="4" y2="3" />
-        <line x1="12" y1="21" x2="12" y2="12" />
-        <line x1="12" y1="8" x2="12" y2="3" />
-        <line x1="20" y1="21" x2="20" y2="16" />
-        <line x1="20" y1="12" x2="20" y2="3" />
-        <line x1="1" y1="14" x2="7" y2="14" />
-        <line x1="9" y1="8" x2="15" y2="8" />
-        <line x1="17" y1="16" x2="23" y2="16" />
-      </g>
-    ),
-    'chevron-left': <polyline points="15 18 9 12 15 6" />,
+    // Reuses the <Sun /> art — keep this single implementation.
+    sun: <Sun />,
     cloud: <path d={CLOUD} />,
     eye: (
       <g>

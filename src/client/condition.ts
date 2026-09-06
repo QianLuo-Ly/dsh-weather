@@ -9,6 +9,32 @@ export interface ConditionInfo {
   emoji: string
 }
 
+/**
+ * WMO code families — the single source of truth for weather-code semantics.
+ * `icons.tsx` picks the glyph, `weatherAdvice` picks the umbrella hint and
+ * `evaluateAlerts` (weather-api.ts) picks the severe-weather alert from these
+ * sets. Do not hand-roll another code list elsewhere.
+ */
+export const CLEAR_CODES = new Set([0, 1])
+export const RAIN_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82])
+export const THUNDER_CODES = new Set([95, 96])
+export const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86])
+export const HEAVY_RAIN_CODES = new Set([65, 82, 99])
+export const HEAVY_SNOW_CODES = new Set([75, 86])
+/** Any code that produces liquid/solid precipitation on the ground. */
+export const PRECIP_CODES = new Set([...RAIN_CODES, ...THUNDER_CODES, ...HEAVY_RAIN_CODES])
+/** Heavy rain + thunder — the "强降雨/雷暴" severe family (lead-time scan). */
+export const STORM_CODES = new Set([...HEAVY_RAIN_CODES, ...THUNDER_CODES])
+
+/**
+ * Shared rule thresholds. All values are metric (°C / km/h) because the feed
+ * is metric-only; the display unit never changes the rules.
+ */
+export const HEAT_C = 35
+export const COLD_C = 0
+export const WIND_ALERT_KMH = 60
+export const WIND_ADVICE_KMH = 40
+
 const DAY: Record<number, ConditionInfo> = {
   0: { label: '晴', emoji: '☀️' },
   1: { label: '大致晴朗', emoji: '🌤️' },
@@ -60,16 +86,18 @@ export function hourLabel(iso: string): string {
   return `${match[1]}时`
 }
 
-/** Weekday or short date label for a daily row. */
-export function dayLabel(iso: string): string {
+/**
+ * Weekday or short date label for a daily row. The forecast feed always starts
+ * its daily grid at the *location's* "today", so the first rows are labeled by
+ * position — comparing calendar dates across browser/location timezones would
+ * mislabel "today" near midnight. Later rows fall back to the parsed weekday.
+ */
+export function dayLabel(iso: string, index = 0): string {
+  if (index === 0) return '今天'
+  if (index === 1) return '明天'
+  if (index === 2) return '后天'
   const date = new Date(`${iso}T00:00:00`)
   if (Number.isNaN(date.getTime())) return iso
-  const today = new Date()
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate())
-  const diffDays = Math.round((date.getTime() - startOfToday.getTime()) / 86_400_000)
-  if (diffDays === 0) return '今天'
-  if (diffDays === 1) return '明天'
-  if (diffDays === 2) return '后天'
   const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
   return weekdays[date.getDay()]
 }
@@ -100,41 +128,42 @@ export function timeLabel(iso: string | undefined): string {
   return match === null ? iso : match[1]
 }
 
-const RAINY_CODES = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99]
-
 /** One-line, rule-based activity advice for the current conditions. */
 export function weatherAdvice(data: WeatherData): { icon: string; text: string } {
   const current = data.current
   const today = data.daily[0]
-  if (RAINY_CODES.includes(current.weatherCode)) {
+  const code = current.weatherCode
+  const isClear = CLEAR_CODES.has(code)
+  const hasPrecip = PRECIP_CODES.has(code)
+  if (hasPrecip) {
     return { icon: '☂️', text: '有降水，出门记得带伞' }
   }
-  if (current.temperature >= 35) {
+  if (current.temperature >= HEAT_C) {
     return { icon: '🥵', text: '高温天气，注意防暑补水' }
   }
-  if (current.temperature <= 0) {
+  if (current.temperature <= COLD_C) {
     return { icon: '🧣', text: '严寒天气，注意防寒保暖' }
   }
-  if (current.temperature >= 28 && (current.weatherCode === 0 || current.weatherCode === 1)) {
+  if (current.temperature >= 28 && isClear) {
     return { icon: '😎', text: '晴热天气，出门做好防晒' }
   }
-  if (current.weatherCode === 0 || current.weatherCode === 1) {
+  if (isClear) {
     return { icon: '🌞', text: '天气晴好，适合户外活动' }
   }
-  if (current.windSpeed >= 40) {
+  if (current.windSpeed !== undefined && current.windSpeed >= WIND_ADVICE_KMH) {
     return { icon: '💨', text: '风力较大，注意高空坠物' }
   }
   if ((today?.precipProb ?? 0) >= 60) {
     return { icon: '🌧️', text: '今日降水概率较高，备好雨具' }
   }
-  if (data.air !== undefined && data.air.aqi > 150) {
+  if (data.air !== undefined && data.air.aqi !== undefined && data.air.aqi > 150) {
     return { icon: '😷', text: '空气质量较差，外出建议佩戴口罩' }
   }
   return { icon: '🌤️', text: '天气平稳，适合日常出行' }
 }
 
 /** Short minute total like `45 分钟` / `1.5 小时` / `12 小时`. */
-export function durationLabel(minutes: number): string {
+function durationLabel(minutes: number): string {
   if (minutes < 60) return `${minutes} 分钟`
   const hours = minutes / 60
   if (hours >= 10) return `${Math.round(hours)} 小时`
@@ -161,15 +190,15 @@ export function rainTimingText(rain: { rainingNow: boolean; onsetMinutes?: numbe
 }
 
 /**
- * Compact rain hint for the weather-bar subtitle — only shown when rain is
- * imminent (currently falling, or starting within 2 h).
+ * Rounded "minutes from now" for rain-soon messaging. Never inflates a near
+ * onset: sub-5-minute reads as 1–5, anything else rounds to the nearest
+ * 5-minute mark (8 → 10), so a notice cannot claim a rain that is minutes
+ * away is a quarter of an hour away.
  */
-export function rainSoonShortText(rain: { rainingNow: boolean; onsetMinutes?: number }): string | undefined {
-  if (rain.rainingNow) return '正在下雨'
-  const onset = rain.onsetMinutes
-  if (onset === undefined || onset > 120) return undefined
-  const rounded = Math.max(5, Math.round(onset / 5) * 5)
-  return `约 ${rounded} 分钟后有雨`
+export function rainOnsetRounded(minutes: number): number {
+  if (minutes < 1) return 1
+  if (minutes < 5) return 5
+  return Math.max(5, Math.round(minutes / 5) * 5)
 }
 
 /** 8-point Chinese wind-direction label (`0°`→`北风`, `90°`→`东风`). */
@@ -178,4 +207,20 @@ export function windDirectionText(degrees?: number): string | undefined {
   const names = ['北', '东北', '东', '东南', '南', '西南', '西', '西北']
   const index = Math.round((((degrees % 360) + 360) % 360) / 45) % 8
   return `${names[index]}风`
+}
+
+/** `HH:MM` (24 h) for a Date — used by the chip's live clock. */
+export function clockTime(date: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
+/** `7月5日` for a Date — kept short for the header row. */
+export function clockDate(date: Date): string {
+  return `${date.getMonth() + 1}月${date.getDate()}日`
+}
+
+/** `HH:MM` for a millisecond timestamp (e.g. the stale-snapshot "updated at"). */
+export function hhmm(millis: number): string {
+  return clockTime(new Date(millis))
 }

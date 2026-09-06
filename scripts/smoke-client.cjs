@@ -2,11 +2,12 @@
 // `apply` + `inject`, with react resolved through the injected require.
 const fs = require('node:fs')
 const vm = require('node:vm')
+const path = require('node:path')
 
 let loaded = null
 global.window = { __ModuleLoader__: { load: (entry) => { loaded = entry } } }
 
-const code = fs.readFileSync('D:/2_MyProject/dsh-weather/lib/client.js', 'utf8')
+const code = fs.readFileSync(path.join(__dirname, '..', 'lib', 'client.js'), 'utf8')
 vm.runInThisContext(code, { filename: 'lib/client.js' })
 
 if (!loaded) throw new Error('loader was never called')

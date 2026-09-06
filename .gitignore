@@ -1,11 +1,21 @@
+# 依赖
 node_modules/
 *.tsbuildinfo
+
+# 操作系统
 .DS_Store
-# JetBrains IDE 目录
+
+# IDE
 .idea/
-# 本地联调产物（构建 bundle、DOM dump、临时页面等），不进入仓库
+
+# 本地联调产物（构建 bundle、DOM dump、临时页面等），不进仓库
 harness/
+
 # 个人本地调试脚本
 scripts/set-manual-panyu.mjs
+
+# 机器本地的 pnpm 配置（store 目录等），不进仓库
+.npmrc
+
 # 上架准备草稿（PR 条目文件等）
 .release/
