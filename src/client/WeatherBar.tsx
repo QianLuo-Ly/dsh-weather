@@ -663,7 +663,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const gustTextValue = cur?.windGusts !== undefined ? windText(cur.windGusts, units) : undefined
   const dewPointTextValue = cur?.dewPoint !== undefined ? tempText(cur.dewPoint, units) : undefined
   const pressureTextValue = cur?.pressure !== undefined ? `${Math.round(cur.pressure)} hPa` : undefined
-  const visibilityTextValue = cur?.visibility !== undefined ? `${Math.round(cur.visibility)} km` : undefined
+  const visibilityTextValue = cur?.visibility !== undefined ? `${cur.visibility.toFixed(1)} km` : undefined
   const cloudTextValue = cur?.cloudCover !== undefined ? `${Math.round(cur.cloudCover)}%` : undefined
   const rainTotal = data?.daily[0]?.precipSum
   const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05 ? `${rainTotal.toFixed(1)} mm` : undefined

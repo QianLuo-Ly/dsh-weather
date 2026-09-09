@@ -878,7 +878,10 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       windGusts: current.wind_gusts_10m ?? undefined,
       pressure: current.surface_pressure ?? undefined,
       cloudCover: current.cloud_cover ?? undefined,
-      visibility: current.visibility ?? undefined,
+      // Open-Meteo reports visibility in METERS (the unit is fixed and not
+      // affected by the `units` param). Convert to km so WeatherData matches
+      // its documented unit.
+      visibility: current.visibility != null ? current.visibility / 1000 : undefined,
       dewPoint: current.dew_point_2m ?? undefined,
       precipitation: current.precipitation ?? undefined,
     },
