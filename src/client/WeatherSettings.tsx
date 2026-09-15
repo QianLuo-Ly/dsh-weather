@@ -32,12 +32,14 @@ import { useSavedLocations, writeVerified, type NoticeKind } from './hooks'
 import { SHADOW, TOKEN } from './theme'
 
 /**
- * Diagnose an already-refused write: re-read the authority, report what the
- * Host says, and retry the same edit without the revision fence. Supplied by
- * the plugin entry (it needs the remote service, which this view does not).
+ * Replay an already-refused write on the unfenced path and return what the
+ * authority actually holds. Supplied by the plugin entry (it needs the remote
+ * service, which this view does not).
  */
 export interface WriteProbe {
-  (fields: Array<[string, unknown]>, clears: string[]): Promise<{ landed: boolean; detail: string }>
+  (fields: Array<[string, unknown]>, clears: string[]): Promise<
+    { ok: true; value: unknown } | { ok: false; detail: string }
+  >
 }
 
 export interface WeatherSettingsSectionProps {
@@ -63,6 +65,8 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   const [search, setSearch] = useState('')
   const [suggestions, setSuggestions] = useState<GeoLocation[]>([])
   const [searching, setSearching] = useState(false)
+  /** Keyboard-highlighted suggestion; mirrors the pointer on hover. */
+  const [activeIndex, setActiveIndex] = useState(0)
   const [notice, setNotice] = useState<Notice | null>(null)
   const [diag, setDiag] = useState<LocationDiagnostics | null>(null)
   const [diagBusy, setDiagBusy] = useState(false)
@@ -120,6 +124,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   useEffect(() => {
     setSuggestions([])
     setSearching(false)
+    setActiveIndex(0)
   }, [effective.locationMode])
 
   // Dropdown closes on outside click (Esc is handled on the input itself).
@@ -159,13 +164,14 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     if (trimmed === '') {
       setSuggestions([])
       setSearching(false)
+      setActiveIndex(0)
       return
     }
     let cancelled = false
     const timer = window.setTimeout(() => {
       setSearching(true)
       void searchCity(trimmed, 5)
-        .then((results) => { if (!cancelled) setSuggestions(results) })
+        .then((results) => { if (!cancelled) { setSuggestions(results); setActiveIndex(0) } })
         .catch(() => { if (!cancelled) setSuggestions([]) })
         .finally(() => { if (!cancelled) setSearching(false) })
     }, 250)
@@ -179,13 +185,22 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
    * Issue one or more settings writes and verify the resulting snapshot — a
    * Host refusal must surface as a notice, never as a silent no-op.
    *
-   * `writeVerified` re-issues the batch once before reporting: the routine
-   * refusal here is the Host's revision fence going stale behind an out-of-band
-   * write (another tab, a hand-edited document), and the transport has already
-   * re-read the authority by the time it settles. When even that fails the
-   * refusal is not routine, and the transport has thrown away the reason —
-   * so fall back to the probe, which reports the Host's own words and retries
-   * unfenced. A bare "retry later" would leave the user (and us) with nothing.
+   * `writeVerified` re-issues the batch once before reporting. When even that
+   * fails the refusal is not routine, and the transport has thrown away the
+   * reason (its contract settles a refused write like an accepted one), so the
+   * batch is replayed through `probe`: it writes on the unfenced path and
+   * returns the authority's own value.
+   *
+   * Rendering that returned value is the point of the fallback, not a detail.
+   * The scoped transport keeps a namespace's revision in step by folding each
+   * write answer into a shared mirror, and that mirror deliberately keeps its
+   * held view when a refresh fails (`settings-mirror.ts`: "the held view keeps
+   * serving"). A client whose revision no longer matches the Host's — the Host
+   * resets `registration.revision` to 0 whenever the plugin re-registers, e.g.
+   * on a `dsh web` restart — therefore keeps failing the fence, and its
+   * subscription never delivers the value it just stored. Reading the value
+   * back from the write answer is what makes the panel show the truth in that
+   * state instead of snapping back.
    */
   const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): void => {
     if (!scope.getSnapshot().writable) {
@@ -196,14 +211,13 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     const rawClears = clears.map((field) => field as string)
     void writeVerified(scope, rawFields, rawClears).then((accepted) => {
       if (accepted) return
-      const clientRevision = scope.getSnapshot().revision
       void probe(rawFields, rawClears).then((result) => {
-        notify(
-          result.landed
-            ? `已保存（该写入被版本栅栏挡住，已改用无栅栏写入；客户端 rev=${clientRevision ?? '?'}）`
-            : `该设置未被保存：${result.detail}｜客户端 rev=${clientRevision ?? '?'}`,
-          result.landed ? 'ok' : 'err',
-        )
+        if (result.ok) {
+          setConfig(sanitizeConfig(result.value as Partial<WeatherConfig> | undefined))
+          notify('已保存（原写入被服务端的版本栅栏拒绝，已改用无栅栏写入）', 'ok')
+          return
+        }
+        notify(`该设置未被保存：${result.detail}｜客户端 rev=${scope.getSnapshot().revision ?? '?'}`, 'err')
       })
     })
   }, [scope, notify, probe])
@@ -287,6 +301,22 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     if (parsed === effective[field]) return
     clearNotice()
     set(field, parsed)
+  }
+
+  /**
+   * Adopt one search result as the manual location. Selecting a place means
+   * custom coordinates, so the hook writes coords+name in one batch and clears
+   * any active saved id.
+   */
+  const pickPlace = (place: GeoLocation): void => {
+    savedCities.selectPlace(place)
+    // Skip the debounce re-search only when the text actually changes — a no-op
+    // setState would not run the effect and would leave the guard armed.
+    if (place.name !== search) {
+      skipNextSearchRef.current = true
+      setSearch(place.name)
+    }
+    setSuggestions([])
   }
 
   const atSavedLimit = savedCities.saved.length >= MAX_SAVED_LOCATIONS
@@ -415,11 +445,29 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                 value={search}
                 maxLength={MAX_NAME_LENGTH}
                 placeholder="输入城市名，如：北京 / Beijing"
-                onChange={(event) => setSearch(event.target.value)}
-                onKeyDown={(event) => { if (event.key === 'Escape') setSuggestions([]) }}
+                onChange={(event) => { setSearch(event.target.value); setActiveIndex(0) }}
+                onKeyDown={(event) => {
+                  // Arrow keys drive the active row while focus stays in the
+                  // input, so typing, picking and starring never fight for focus.
+                  if (event.key === 'Escape') { setSuggestions([]); return }
+                  if (suggestions.length === 0) return
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault()
+                    setActiveIndex((prev) => (prev + 1) % suggestions.length)
+                  } else if (event.key === 'ArrowUp') {
+                    event.preventDefault()
+                    setActiveIndex((prev) => (prev - 1 + suggestions.length) % suggestions.length)
+                  } else if (event.key === 'Enter') {
+                    event.preventDefault()
+                    const chosen = suggestions[activeIndex] ?? suggestions[0]
+                    if (chosen !== undefined) pickPlace(chosen)
+                  }
+                }}
                 style={{ ...input, paddingRight: searching ? 72 : undefined }}
                 aria-label="搜索城市"
                 aria-expanded={suggestions.length > 0}
+                aria-controls={suggestions.length > 0 ? `${ids}-suggestions` : undefined}
+                aria-activedescendant={suggestions.length > 0 ? `${ids}-suggestion-${activeIndex}` : undefined}
               />
               {searching && <span style={searchingBadge}>搜索中…</span>}
               {suggestions.length > 0 && (
@@ -430,7 +478,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                   className="dshw-ac-panel"
                   style={suggestionPanel}
                 >
-                  {suggestions.map((place) => {
+                  {suggestions.map((place, index) => {
                     const alreadySaved = savedCities.isSaved(place.latitude, place.longitude)
                     const saveBlocked = alreadySaved || atSavedLimit
                     const saveHint = alreadySaved
@@ -441,28 +489,18 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                     return (
                       <div
                         key={`${place.latitude},${place.longitude},${place.name}`}
+                        id={`${ids}-suggestion-${index}`}
                         role="listitem"
                         className="dshw-ac-row"
+                        data-active={index === activeIndex}
                         style={suggestionRow}
+                        onMouseEnter={() => setActiveIndex(index)}
                       >
                         <button
                           type="button"
                           className="dshw-ac-pick"
                           aria-label={`切换到 ${place.name}`}
-                          onClick={() => {
-                            // Selecting a place = custom coordinates (the hook
-                            // writes coords+name in one batch and clears any
-                            // active saved id).
-                            savedCities.selectPlace(place)
-                            // Skip the debounce re-search only when the text
-                            // actually changes — a no-op setState would not run
-                            // the effect and would leave the guard armed.
-                            if (place.name !== search) {
-                              skipNextSearchRef.current = true
-                              setSearch(place.name)
-                            }
-                            setSuggestions([])
-                          }}
+                          onClick={() => pickPlace(place)}
                           style={suggestionPick}
                         >
                           <span style={suggestionPin}><Glyph name="pin" size={14} /></span>
@@ -476,17 +514,19 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                         {/* Saving must not switch the location or clear the search. */}
                         <button
                           type="button"
-                          className="dshw-ac-save"
+                          className="dshw-ac-star"
                           disabled={saveBlocked}
                           title={saveHint}
                           aria-label={saveHint}
+                          aria-pressed={alreadySaved}
                           onClick={() => savedCities.addPlace({ name: place.name, latitude: place.latitude, longitude: place.longitude })}
                           style={{
-                            ...suggestionSave,
-                            ...(saveBlocked ? { color: MUTED, cursor: 'default' } : {}),
+                            ...suggestionStar,
+                            ...(alreadySaved ? { color: ACCENT, cursor: 'default' } : {}),
+                            ...(saveBlocked && !alreadySaved ? { color: MUTED, cursor: 'default' } : {}),
                           }}
                         >
-                          {alreadySaved ? '已收藏' : '收藏'}
+                          {alreadySaved ? '★' : '☆'}
                         </button>
                       </div>
                     )
@@ -774,10 +814,10 @@ const inputButton: CSSProperties = {
   cursor: 'pointer',
 }
 
-// ── City-search dropdown ────────────────────────────────────────────────────
-// Positioning and the two-line result layout ride inline styles; hover /
-// focus-visible states live in the injected stylesheet (`dshw-ac-*`), since
-// inline styles cannot express pseudo-classes.
+// ── City picker ─────────────────────────────────────────────────────────────
+// Positioning and the two-line result layout ride inline styles; hover and
+// keyboard-active states live in the injected stylesheet (`dshw-ac-*`), since
+// inline styles cannot express pseudo-classes or attribute selectors.
 
 const searchingBadge: CSSProperties = {
   position: 'absolute',
@@ -795,12 +835,12 @@ const suggestionPanel: CSSProperties = {
   left: 0,
   right: 0,
   zIndex: 20,
-  padding: 4,
+  padding: 6,
   background: INPUT_BG,
   border: `1px solid ${BORDER}`,
-  borderRadius: 12,
+  borderRadius: 14,
   boxShadow: SHADOW.dropdown,
-  maxHeight: 268,
+  maxHeight: 288,
   overflowY: 'auto',
   overscrollBehavior: 'contain',
 }
@@ -808,30 +848,38 @@ const suggestionPanel: CSSProperties = {
 const suggestionRow: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 2,
-  borderRadius: 9,
+  gap: 4,
+  padding: '2px 4px 2px 0',
+  borderRadius: 10,
 }
 
 const suggestionPick: CSSProperties = {
   display: 'flex',
   alignItems: 'center',
-  gap: 9,
+  gap: 10,
   flex: 1,
   minWidth: 0,
-  padding: '7px 8px',
+  padding: '6px 8px',
   background: 'transparent',
   border: 'none',
-  borderRadius: 9,
+  borderRadius: 10,
   cursor: 'pointer',
   textAlign: 'left',
   font: 'inherit',
   color: FG,
 }
 
+/** Tinted disc behind the pin, so each result has a clear visual anchor. */
 const suggestionPin: CSSProperties = {
   display: 'flex',
   flex: '0 0 auto',
-  color: MUTED,
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  borderRadius: 9,
+  color: ACCENT,
+  background: 'rgba(79, 140, 255, 0.12)',
 }
 
 const suggestionLines: CSSProperties = {
@@ -842,8 +890,9 @@ const suggestionLines: CSSProperties = {
 }
 
 const suggestionName: CSSProperties = {
-  fontSize: 13,
-  lineHeight: '17px',
+  fontSize: 13.5,
+  lineHeight: '18px',
+  fontWeight: 550,
   overflow: 'hidden',
   textOverflow: 'ellipsis',
   whiteSpace: 'nowrap',
@@ -856,15 +905,21 @@ const suggestionCoords: CSSProperties = {
   color: MUTED,
 }
 
-const suggestionSave: CSSProperties = {
+/** Icon-only bookmark toggle (★ saved / ☆ available), not a text button. */
+const suggestionStar: CSSProperties = {
   fontFamily: 'inherit',
   flex: '0 0 auto',
-  padding: '5px 10px',
-  fontSize: 12,
-  whiteSpace: 'nowrap',
-  color: ACCENT,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 28,
+  padding: 0,
+  fontSize: 15,
+  lineHeight: 1,
+  color: MUTED,
   background: 'transparent',
-  border: '1px solid transparent',
-  borderRadius: 8,
+  border: 'none',
+  borderRadius: 9,
   cursor: 'pointer',
 }

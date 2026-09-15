@@ -38,7 +38,10 @@ interface RemoteSettingsFace {
     ns: string,
     ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>,
     expectedRevision: number | undefined,
-  ) => Promise<{ ok: true } | { ok: false; error: { message: string } }>
+  ) => Promise<
+    | { ok: true; value: { revision?: number; value?: unknown } }
+    | { ok: false; error: { message: string } }
+  >
 }
 
 /**
@@ -46,18 +49,18 @@ interface RemoteSettingsFace {
  *
  * `settingsScope`'s transport deliberately swallows a Host refusal: the write
  * promise settles normally and the only signal is a snapshot that did not
- * change, so a caller cannot tell "rejected by the revision fence" from
- * "rejected by the schema" from "the gateway never took it". This probe
- * re-reads the authority and reports what the Host actually says, then attempts
- * the same edit WITHOUT the revision fence. The fence is precisely what makes a
- * refusal opaque (the transport always attaches one), and dropping it is also
- * the one remaining way to land an edit the fenced path keeps losing.
+ * change, so a caller cannot tell a stale revision fence from a schema refusal
+ * from a gateway miss. The fence is also the part a plugin cannot influence —
+ * the transport always attaches the revision it last read — so this probe
+ * replays the edit through `remote.settings` directly, with NO fence, and
+ * returns the authority's own resolved value from the write answer.
  *
- * `remote` is read lazily through `ctx.get` so a deployment without the
- * settings gateway cannot block plugin activation.
+ * Only reached after a verified write has already failed twice, so the normal
+ * path never pays for it. `remote` is read lazily through `ctx.get` so a
+ * deployment without the settings gateway cannot block plugin activation.
  *
  * @param ctx - the plugin's client context.
- * @returns a probe invoked with the fields/clears of an already-refused write.
+ * @returns probe invoked with the fields/clears of an already-refused write.
  */
 function createWriteProbe(ctx: Context): WriteProbe {
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
@@ -65,35 +68,36 @@ function createWriteProbe(ctx: Context): WriteProbe {
     const remote = (ctx as unknown as { get?: (name: string) => { settings?: RemoteSettingsFace } | undefined })
       .get?.('remote')
     const settings = remote?.settings
-    if (settings === undefined) return { landed: false, detail: 'remote.settings 不可用' }
-    let serverRevision: number | undefined
-    let stored = '未知'
-    try {
-      const described = await settings.describe()
-      if (described.ok) {
-        const row = (described.value.namespaces ?? []).find((candidate) => candidate.ns === WEATHER_NS)
-        serverRevision = row?.revision
-        const user = row?.user as Record<string, unknown> | undefined
-        stored = fields.map(([field]) => `${field}=${JSON.stringify(user?.[field])}`).join(' ') || '—'
-      } else {
-        stored = `describe 被拒：${described.error.message}`
-      }
-    } catch (error) {
-      stored = `describe 异常：${message(error)}`
-    }
+    if (settings === undefined) return { ok: false, detail: 'remote.settings 不可用' }
     const ops = [
       ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
       ...clears.map((field) => ({ op: 'unset' as const, path: [field] })),
     ]
-    const context = `服务端 rev=${serverRevision ?? '?'} 服务端已存 ${stored}`
+    let response: Awaited<ReturnType<RemoteSettingsFace['mutate']>>
     try {
-      const response = await settings.mutate(WEATHER_NS, ops, undefined)
-      return response.ok
-        ? { landed: true, detail: context }
-        : { landed: false, detail: `Host 拒绝（无栅栏）：${response.error.message}｜${context}` }
+      response = await settings.mutate(WEATHER_NS, ops, undefined)
     } catch (error) {
-      return { landed: false, detail: `mutate 异常：${message(error)}｜${context}` }
+      return { ok: false, detail: `mutate 异常：${message(error)}` }
     }
+    if (response.ok) return { ok: true, value: response.value.value }
+    // Refused even without the fence: report the Host's own words plus the
+    // state it holds, which is what separates "value rejected" from anything
+    // else. Reached only on the failure path, so the extra read is free.
+    let detail = `Host 拒绝（无栅栏）：${response.error.message}`
+    try {
+      const described = await settings.describe()
+      if (described.ok) {
+        const row = (described.value.namespaces ?? []).find((candidate) => candidate.ns === WEATHER_NS)
+        const user = row?.user as Record<string, unknown> | undefined
+        const stored = fields.map(([field]) => `${field}=${JSON.stringify(user?.[field])}`).join(' ')
+        detail += `｜服务端 rev=${row?.revision ?? '?'} 服务端已存 ${stored === '' ? '—' : stored}`
+      } else {
+        detail += `｜describe 被拒：${described.error.message}`
+      }
+    } catch (error) {
+      detail += `｜describe 异常：${message(error)}`
+    }
+    return { ok: false, detail }
   }
 }
 
