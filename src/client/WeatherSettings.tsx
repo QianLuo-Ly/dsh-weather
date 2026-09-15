@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import {
+  BRIEF_TIMES,
   DEFAULT_WEATHER_CONFIG,
   LAT_RANGE,
   LON_RANGE,
@@ -384,25 +385,21 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
 
       {effective.briefEnabled && (
         <>
-          <Row label="早上简报时间" labelFor={`${ids}-brief-morning`}>
-            <input
+          <Row label="早上简报时间">
+            <ClockField
               id={`${ids}-brief-morning`}
-              type="time"
+              label="早上简报时间"
               value={effective.briefMorning}
-              aria-label="早上简报时间（HH:MM）"
-              onChange={(event) => commitClockTime('briefMorning', event.currentTarget.value)}
-              style={{ ...input, width: 120 }}
+              onCommit={(text) => commitClockTime('briefMorning', text)}
             />
             <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送今日天气</span>
           </Row>
-          <Row label="晚间简报时间" labelFor={`${ids}-brief-evening`}>
-            <input
+          <Row label="晚间简报时间">
+            <ClockField
               id={`${ids}-brief-evening`}
-              type="time"
+              label="晚间简报时间"
               value={effective.briefEvening}
-              aria-label="晚间简报时间（HH:MM）"
-              onChange={(event) => commitClockTime('briefEvening', event.currentTarget.value)}
-              style={{ ...input, width: 120 }}
+              onCommit={(text) => commitClockTime('briefEvening', text)}
             />
             <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送明日天气</span>
           </Row>
@@ -766,6 +763,58 @@ function precisionLabel(precision: string | undefined): string {
   return '未分级'
 }
 
+/** Hour choices `00`–`23`. */
+const CLOCK_HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, '0'))
+/** Minute choices in five-minute steps — the granularity a brief actually needs. */
+const CLOCK_MINUTES = Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, '0'))
+
+/**
+ * Pick an `HH:MM` time from two styled selects.
+ *
+ * A native `<input type="time">` was the only control in this page whose chrome
+ * the plugin could not touch: its own clock affordance and spinner popup ignore
+ * the design tokens, read as a stray browser widget next to the rest of the
+ * form, and on some platforms are awkward to drive at all. Two selects render
+ * with the page's own input styling and are unambiguous to operate. A stored
+ * minute that is not a multiple of five is added to the list rather than
+ * silently rewritten, so hand-edited documents round-trip unchanged.
+ */
+function ClockField(props: {
+  id: string
+  label: string
+  value: string
+  onCommit: (text: string) => void
+}): ReactElement {
+  const { id, label, value, onCommit } = props
+  const parsed = parseClockTime(value) ?? BRIEF_TIMES.morning
+  const [hour, minute] = parsed.split(':') as [string, string]
+  const minutes = CLOCK_MINUTES.includes(minute) ? CLOCK_MINUTES : [...CLOCK_MINUTES, minute].sort()
+  const commit = (nextHour: string, nextMinute: string): void => onCommit(`${nextHour}:${nextMinute}`)
+  return (
+    <div style={clockField}>
+      <select
+        id={`${id}-hour`}
+        aria-label={`${label}（小时）`}
+        value={hour}
+        onChange={(event) => commit(event.currentTarget.value, minute)}
+        style={clockSelect}
+      >
+        {CLOCK_HOURS.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+      <span style={{ color: MUTED, fontSize: 13 }}>:</span>
+      <select
+        id={`${id}-minute`}
+        aria-label={`${label}（分钟）`}
+        value={minute}
+        onChange={(event) => commit(hour, event.currentTarget.value)}
+        style={clockSelect}
+      >
+        {minutes.map((option) => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </div>
+  )
+}
+
 function Row(props: { label: string; labelFor?: string; children: ReactNode }): ReactElement {
   const { label, labelFor, children } = props
   const labelNode = labelFor !== undefined
@@ -780,6 +829,27 @@ function Row(props: { label: string; labelFor?: string; children: ReactNode }): 
 }
 
 const checkbox: CSSProperties = { width: 16, height: 16, accentColor: ACCENT, cursor: 'pointer' }
+
+const clockField: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+}
+
+/** Matches the page's other inputs; the popup is native but the control is ours. */
+const clockSelect: CSSProperties = {
+  fontFamily: 'inherit',
+  fontVariantNumeric: 'tabular-nums',
+  fontSize: 13,
+  color: FG,
+  background: INPUT_BG,
+  border: `1px solid ${BORDER}`,
+  borderRadius: 8,
+  padding: '5px 6px',
+  cursor: 'pointer',
+  minWidth: 52,
+  textAlign: 'center',
+}
 
 const radioLabel: CSSProperties = {
   display: 'flex',

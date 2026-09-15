@@ -25,8 +25,17 @@ import { WeatherBar } from './WeatherBar'
 import { WeatherSettingsSection, type WriteProbe } from './WeatherSettings'
 import { ensureWeatherStyles } from './styles'
 
-/** Cordis service injection for the client plugin fiber. */
-export const inject = ['slots', 'settingsScope']
+/**
+ * Cordis service injection for the client plugin fiber.
+ *
+ * `remote` is declared rather than merely looked up: the fallback write has to
+ * call `remote.settings` from THIS plugin's own fiber, and the settings
+ * transport keeps its provider context precisely because a consumer reaching
+ * the namespace needs it in its own inject list. `settingsScope` cannot exist
+ * without `remote` (its mirror subscribes to the settings event stream), so
+ * declaring it cannot deadlock activation.
+ */
+export const inject = ['slots', 'settingsScope', 'remote']
 
 /** Minimal `ctx.remote.settings` surface used by the refused-write probe. */
 interface RemoteSettingsFace {
@@ -65,9 +74,14 @@ interface RemoteSettingsFace {
 function createWriteProbe(ctx: Context): WriteProbe {
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
   return async (fields, clears) => {
-    const remote = (ctx as unknown as { get?: (name: string) => { settings?: RemoteSettingsFace } | undefined })
-      .get?.('remote')
-    const settings = remote?.settings
+    // `remote` is injected, but read through the property with a `get` fallback
+    // so a naming mismatch surfaces as this probe's own diagnostic instead of an
+    // activation failure.
+    const remote = (ctx as unknown as {
+      remote?: { settings?: RemoteSettingsFace }
+      get?: (name: string) => { settings?: RemoteSettingsFace } | undefined
+    })
+    const settings = remote.remote?.settings ?? remote.get?.('remote')?.settings
     if (settings === undefined) return { ok: false, detail: 'remote.settings 不可用' }
     const ops = [
       ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
