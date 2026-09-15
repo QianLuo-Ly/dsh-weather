@@ -435,6 +435,48 @@ export interface SavedLocationsState {
 }
 
 /**
+ * Issue a batch of settings writes and confirm the authority actually holds
+ * them, re-issuing the batch once if it does not.
+ *
+ * A refusal is invisible in the transport's settlement: `set()`/`unset()`
+ * RESOLVE even when the Host rejected the value, because the failure is folded
+ * into a recovery read (see `useConfigWriter` below). The one refusal that is
+ * routine rather than exceptional is the Host's revision fence — a write is
+ * addressed with the revision the client last read, so any write that landed
+ * out of band (another tab, a hand-edited `settings.yaml` picked up by the
+ * file watcher) makes the next one refuse with `settings/conflict`. The
+ * transport's recovery read has already refreshed the revision by the time the
+ * batch settles, so a single re-issue converts that whole class into a silent
+ * success instead of telling the user to retry by hand.
+ *
+ * @param scope - the bound weather settings scope.
+ * @param fields - field/value pairs to set.
+ * @param clears - fields to clear.
+ * @returns whether the authority holds the requested state; false when the
+ *   batch could not be issued at all (transport failure).
+ */
+export function writeVerified(
+  scope: SettingsScope<WeatherConfig>,
+  fields: Array<[string, unknown]>,
+  clears: string[] = [],
+): Promise<boolean> {
+  const apply = (): Promise<unknown[]> => Promise.all([
+    ...fields.map(([field, value]) => scope.set(field, value)),
+    ...clears.map((field) => scope.unset(field)),
+  ])
+  const landed = (): boolean => {
+    const current = scope.getSnapshot().value as Record<string, unknown> | undefined
+    return current !== undefined
+      && fields.every(([field, value]) => JSON.stringify(current[field]) === JSON.stringify(value))
+      && clears.every((field) => current[field] === undefined)
+  }
+  // Never rejects: a throw is "did not land", which the retry then re-attempts
+  // and the caller reports as a refused write.
+  const attempt = (): Promise<boolean> => apply().then(landed, () => false)
+  return attempt().then((ok) => (ok ? true : attempt()))
+}
+
+/**
  * Config write helpers honoring the SettingsScope contract.
  *
  * The transport is the only authority on whether a write was accepted: a
@@ -460,11 +502,11 @@ export function useConfigWriter(scope: SettingsScope<WeatherConfig>): {
       writable: () => scope.getSnapshot().writable,
       write: (field: string, value: unknown): Promise<boolean> => {
         if (!scope.getSnapshot().writable) return Promise.resolve(false)
-        return scope.set(field, value).then(() => same(fieldValue(field), value)).catch(() => false)
+        return writeVerified(scope, [[field, value]])
       },
       clear: (field: string): Promise<boolean> => {
         if (!scope.getSnapshot().writable) return Promise.resolve(false)
-        return scope.unset(field).then(() => fieldValue(field) === undefined).catch(() => false)
+        return writeVerified(scope, [], [field])
       },
       verify: (checks: Array<[string, unknown]>): boolean => checks.every(([field, expected]) => same(fieldValue(field), expected)),
     }

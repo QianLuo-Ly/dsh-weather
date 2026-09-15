@@ -17,5 +17,8 @@ scripts/set-manual-panyu.mjs
 # 机器本地的 pnpm 配置（store 目录等），不进仓库
 .npmrc
 
+# pnpm 内容寻址 store（本地缓存；.npmrc 的 store-dir 未生效时会落在仓库根）
+.pnpm-store/
+
 # 上架准备草稿（PR 条目文件等）
 .release/

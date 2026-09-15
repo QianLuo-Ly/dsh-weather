@@ -27,7 +27,8 @@ import {
   type WeatherConfig,
 } from '../config-shared'
 import { runLocationDiagnostics, searchCity, type GeoLocation, type LocationDiagnostics } from './weather-api'
-import { useSavedLocations, type NoticeKind } from './hooks'
+import { Glyph } from './icons'
+import { useSavedLocations, writeVerified, type NoticeKind } from './hooks'
 import { SHADOW, TOKEN } from './theme'
 
 export interface WeatherSettingsSectionProps {
@@ -165,26 +166,28 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   }, [search])
 
   /**
-   * Issue one or more settings writes as a synchronous batch (the transport
-   * publishes only the final state of a batch) and verify the resulting
-   * snapshot — a Host rejection must surface as a notice, never as a silent
-   * no-op.
+   * Issue one or more settings writes and verify the resulting snapshot — a
+   * Host refusal must surface as a notice, never as a silent no-op.
+   *
+   * `writeVerified` re-issues the batch once before reporting: the routine
+   * refusal here is the Host's revision fence going stale behind an out-of-band
+   * write (another tab, a hand-edited document), and the transport has already
+   * re-read the authority by the time it settles. Only a write that fails twice
+   * reaches the notice — which asks for a refresh, since retrying by hand is
+   * exactly what has just been done automatically.
    */
   const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): void => {
     if (!scope.getSnapshot().writable) {
       notify('当前连接不支持修改设置（只读）', 'err')
       return
     }
-    const pending: Array<Promise<unknown>> = []
-    for (const [field, value] of fields) pending.push(scope.set(field as string, value))
-    for (const field of clears) pending.push(scope.unset(field as string))
-    void Promise.all(pending).then(() => {
-      const current = scope.getSnapshot().value as Record<string, unknown> | undefined
-      const accepted = current !== undefined
-        && fields.every(([field, value]) => JSON.stringify(current[field as string]) === JSON.stringify(value))
-        && clears.every((field) => current[field as string] === undefined)
-      if (!accepted) notify('该设置未被接受，请重试', 'err')
-    }).catch(() => notify('写入失败，请重试', 'err'))
+    void writeVerified(
+      scope,
+      fields.map(([field, value]) => [field as string, value]),
+      clears.map((field) => field as string),
+    ).then((accepted) => {
+      if (!accepted) notify('该设置未被保存，请刷新页面后重试', 'err')
+    })
   }, [scope, notify])
 
   const set = useCallback((field: keyof WeatherConfig, value: unknown): void => {
@@ -396,24 +399,38 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                 placeholder="输入城市名，如：北京 / Beijing"
                 onChange={(event) => setSearch(event.target.value)}
                 onKeyDown={(event) => { if (event.key === 'Escape') setSuggestions([]) }}
-                style={input}
+                style={{ ...input, paddingRight: searching ? 72 : undefined }}
                 aria-label="搜索城市"
                 aria-expanded={suggestions.length > 0}
               />
-              {searching && <span style={{ position: 'absolute', right: 8, top: 7, fontSize: 12, color: MUTED }}>搜索中…</span>}
+              {searching && <span style={searchingBadge}>搜索中…</span>}
               {suggestions.length > 0 && (
                 <div
                   id={`${ids}-suggestions`}
                   role="list"
                   aria-label="城市搜索结果"
-                  style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, background: INPUT_BG, border: `1px solid ${BORDER}`, borderRadius: 10, boxShadow: SHADOW.dropdown, zIndex: 10, overflow: 'hidden', maxHeight: 240, overflowY: 'auto' }}
+                  className="dshw-ac-panel"
+                  style={suggestionPanel}
                 >
                   {suggestions.map((place) => {
                     const alreadySaved = savedCities.isSaved(place.latitude, place.longitude)
+                    const saveBlocked = alreadySaved || atSavedLimit
+                    const saveHint = alreadySaved
+                      ? `${place.name} 已收藏`
+                      : atSavedLimit
+                        ? `最多收藏 ${MAX_SAVED_LOCATIONS} 个城市`
+                        : `收藏 ${place.name}`
                     return (
-                      <div key={`${place.latitude},${place.longitude},${place.name}`} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8 }}>
+                      <div
+                        key={`${place.latitude},${place.longitude},${place.name}`}
+                        role="listitem"
+                        className="dshw-ac-row"
+                        style={suggestionRow}
+                      >
                         <button
                           type="button"
+                          className="dshw-ac-pick"
+                          aria-label={`切换到 ${place.name}`}
                           onClick={() => {
                             // Selecting a place = custom coordinates (the hook
                             // writes coords+name in one batch and clears any
@@ -428,26 +445,30 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                             }
                             setSuggestions([])
                           }}
-                          style={{ flex: 1, minWidth: 0, textAlign: 'left', padding: '8px 12px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13, color: FG }}
+                          style={suggestionPick}
                         >
-                          {place.name}
-                          <span style={{ color: MUTED, fontSize: 12 }}>　{place.latitude.toFixed(2)}, {place.longitude.toFixed(2)}</span>
+                          <span style={suggestionPin}><Glyph name="pin" size={14} /></span>
+                          <span style={suggestionLines}>
+                            <span style={suggestionName}>{place.name}</span>
+                            <span style={suggestionCoords}>
+                              {place.latitude.toFixed(2)}, {place.longitude.toFixed(2)}
+                            </span>
+                          </span>
                         </button>
                         {/* Saving must not switch the location or clear the search. */}
                         <button
                           type="button"
-                          disabled={alreadySaved || atSavedLimit}
-                          aria-label={alreadySaved ? `${place.name} 已收藏` : `收藏 ${place.name}`}
+                          className="dshw-ac-save"
+                          disabled={saveBlocked}
+                          title={saveHint}
+                          aria-label={saveHint}
                           onClick={() => savedCities.addPlace({ name: place.name, latitude: place.latitude, longitude: place.longitude })}
                           style={{
-                            ...inputButton,
-                            padding: '3px 8px',
-                            fontSize: 12,
-                            whiteSpace: 'nowrap',
-                            ...(alreadySaved || atSavedLimit ? { color: MUTED, cursor: 'default' } : {}),
+                            ...suggestionSave,
+                            ...(saveBlocked ? { color: MUTED, cursor: 'default' } : {}),
                           }}
                         >
-                          {alreadySaved ? '已收藏' : '☆ 收藏'}
+                          {alreadySaved ? '已收藏' : '收藏'}
                         </button>
                       </div>
                     )
@@ -732,5 +753,100 @@ const inputButton: CSSProperties = {
   border: `1px solid ${BORDER}`,
   borderRadius: 8,
   padding: '6px 16px',
+  cursor: 'pointer',
+}
+
+// ── City-search dropdown ────────────────────────────────────────────────────
+// Positioning and the two-line result layout ride inline styles; hover /
+// focus-visible states live in the injected stylesheet (`dshw-ac-*`), since
+// inline styles cannot express pseudo-classes.
+
+const searchingBadge: CSSProperties = {
+  position: 'absolute',
+  right: 10,
+  top: '50%',
+  transform: 'translateY(-50%)',
+  fontSize: 11.5,
+  color: MUTED,
+  pointerEvents: 'none',
+}
+
+const suggestionPanel: CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 6px)',
+  left: 0,
+  right: 0,
+  zIndex: 20,
+  padding: 4,
+  background: INPUT_BG,
+  border: `1px solid ${BORDER}`,
+  borderRadius: 12,
+  boxShadow: SHADOW.dropdown,
+  maxHeight: 268,
+  overflowY: 'auto',
+  overscrollBehavior: 'contain',
+}
+
+const suggestionRow: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 2,
+  borderRadius: 9,
+}
+
+const suggestionPick: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 9,
+  flex: 1,
+  minWidth: 0,
+  padding: '7px 8px',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 9,
+  cursor: 'pointer',
+  textAlign: 'left',
+  font: 'inherit',
+  color: FG,
+}
+
+const suggestionPin: CSSProperties = {
+  display: 'flex',
+  flex: '0 0 auto',
+  color: MUTED,
+}
+
+const suggestionLines: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 1,
+  minWidth: 0,
+}
+
+const suggestionName: CSSProperties = {
+  fontSize: 13,
+  lineHeight: '17px',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const suggestionCoords: CSSProperties = {
+  fontVariantNumeric: 'tabular-nums',
+  fontSize: 11.5,
+  lineHeight: '15px',
+  color: MUTED,
+}
+
+const suggestionSave: CSSProperties = {
+  fontFamily: 'inherit',
+  flex: '0 0 auto',
+  padding: '5px 10px',
+  fontSize: 12,
+  whiteSpace: 'nowrap',
+  color: ACCENT,
+  background: 'transparent',
+  border: '1px solid transparent',
+  borderRadius: 8,
   cursor: 'pointer',
 }
