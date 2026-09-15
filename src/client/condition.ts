@@ -21,8 +21,8 @@ export const THUNDER_CODES = new Set([95, 96])
 export const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86])
 export const HEAVY_RAIN_CODES = new Set([65, 82, 99])
 export const HEAVY_SNOW_CODES = new Set([75, 86])
-/** Any code that produces liquid/solid precipitation on the ground. */
-export const PRECIP_CODES = new Set([...RAIN_CODES, ...THUNDER_CODES, ...HEAVY_RAIN_CODES])
+/** Any code that produces precipitation on the ground — rain OR snow. */
+export const PRECIP_CODES = new Set([...RAIN_CODES, ...THUNDER_CODES, ...SNOW_CODES])
 /** Heavy rain + thunder — the "强降雨/雷暴" severe family (lead-time scan). */
 export const STORM_CODES = new Set([...HEAVY_RAIN_CODES, ...THUNDER_CODES])
 
@@ -134,8 +134,13 @@ export function weatherAdvice(data: WeatherData): { icon: string; text: string }
   const today = data.daily[0]
   const code = current.weatherCode
   const isClear = CLEAR_CODES.has(code)
-  const hasPrecip = PRECIP_CODES.has(code)
-  if (hasPrecip) {
+  // Snow is checked before rain: "记得带伞" is the wrong advice for snowfall, and
+  // a snow code must never fall through to the "天气平稳" default — which is what
+  // happened while SNOW_CODES was missing from PRECIP_CODES.
+  if (SNOW_CODES.has(code)) {
+    return { icon: '❄️', text: '有降雪，注意路面湿滑' }
+  }
+  if (PRECIP_CODES.has(code)) {
     return { icon: '☂️', text: '有降水，出门记得带伞' }
   }
   if (current.temperature >= HEAT_C) {

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Temperature trend chart with indicators: a dependency-free SVG line chart
  * showing the 24h temperature curve with the day's high / low annotated in a
  * left gutter (with dashed guide lines), a ring marker at "now" (the first
@@ -9,13 +9,13 @@ import { useId, type ReactElement } from 'react'
 import { TOKEN } from './theme'
 
 export interface TrendChartProps {
-  /** Temperature values (掳C, ascending hours). */
+  /** Temperature values (°C, ascending hours). */
   values: number[]
   /** Optional per-point labels (rendered at a few anchor indices). */
   labels?: string[]
   /** Chart height in px; width flows with the container. */
   height?: number
-  /** Unit suffix for the high/low annotations (掳C / 掳F). */
+  /** Unit suffix for the high/low annotations (°C / °F). */
   unit?: string
 }
 
@@ -29,16 +29,20 @@ export function TrendChart(props: TrendChartProps): ReactElement {
   const gradientId = useId()
 
   if (values.length < 2) {
-    return <div style={{ fontSize: 12, color: TOKEN.fgMuted }}>鏁版嵁涓嶈冻</div>
+    return <div style={{ fontSize: 12, color: TOKEN.fgMuted }}>数据不足</div>
   }
 
   const min = Math.min(...values)
   const max = Math.max(...values)
+  const flat = max === min
   const span = max - min || 1
   const stepX = (WIDTH - PAD_X * 2) / (values.length - 1)
+  // A constant-temperature window has no span to scale against; plotting it at
+  // (value-min)/span === 0 would pin the line to the baseline and read as
+  // "0 °C" or a broken chart. Centre it instead.
   const points = values.map((value, index) => ({
     x: PAD_X + index * stepX,
-    y: PAD_Y + (height - PAD_Y * 2) * (1 - (value - min) / span),
+    y: PAD_Y + (height - PAD_Y * 2) * (flat ? 0.5 : 1 - (value - min) / span),
   }))
   const line = points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
   const area = `${PAD_X},${height - PAD_Y} ${line} ${WIDTH - PAD_X},${height - PAD_Y}`

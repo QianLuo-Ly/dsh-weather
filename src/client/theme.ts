@@ -15,14 +15,28 @@ import type { CSSProperties } from 'react'
 
 export const TOKEN = {
   bg: 'var(--dsw-alias-bg-layer-2, #f3f4f6)',
-  bgSoft: 'var(--dsw-alias-bg-layer-3, rgba(0, 0, 0, 0.06))',
+  /**
+   * Soft/inset surface. NOT a bg-layer token: the host binds layer-1/2/3 to the
+   * SAME colour (pure white in light mode), so a layer-3 fill is invisible on the
+   * header and — because `brightness()` cannot lift a clamped white — leaves the
+   * chip with no hover feedback. The interactive token is a real tint.
+   */
+  bgSoft: 'var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06))',
   /** Elevated surfaces above the base layer (inputs, dropdowns). */
   bgRaised: 'var(--dsw-alias-bg-layer-1, #ffffff)',
+  /** Row hover/active fill for the suggestion list (visible in light mode). */
+  bgHover: 'var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.1))',
   // Text colors flip to pure white in dark mode via .dshw-root (see styles.ts).
   fg: 'var(--dshw-fg, #1f2328)',
   fgMuted: 'var(--dshw-fg-muted, #5f6672)',
   border: 'var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12))',
-  accent: 'var(--dsw-alias-brand-primary, #4f8cff)',
+  /**
+   * Accent. `--dsw-alias-brand-primary` is NOT an accent in this platform: the
+   * host binds it to the near-black (light) / near-white (dark) FOREGROUND, so
+   * every selected/active affordance rendered neutral. The platform's accent
+   * token is the `-new-colorprimary-new-color` alias.
+   */
+  accent: 'var(--dsw-alias-brand-primary-new-colorprimary-new-color, #4f8cff)',
   danger: '#e5484d',
   warn: '#b45309',
 } as const

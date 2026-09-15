@@ -20,8 +20,15 @@ export function toMph(kmh: number): number {
 
 /** `26°C` / `79°F` — the canonical temperature rendering. */
 export function tempText(celsius: number, units: UnitSetting): string {
-  const value = units === 'fahrenheit' ? toFahrenheit(celsius) : celsius
-  return `${Math.round(value)}${units === 'fahrenheit' ? '°F' : '°C'}`
+  return `${Math.round(tempNumber(celsius, units))}${units === 'fahrenheit' ? '°F' : '°C'}`
+}
+
+/**
+ * Numeric temperature in the active unit — for charts that plot the value
+ * itself. Without this, a caller can plot metric °C while labelling the axis °F.
+ */
+export function tempNumber(celsius: number, units: UnitSetting): number {
+  return units === 'fahrenheit' ? toFahrenheit(celsius) : celsius
 }
 
 /** `12 km/h` / `7 mph`. */

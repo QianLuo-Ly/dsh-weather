@@ -30,7 +30,8 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 ## 产物契约
 
 - `lib/index.js`：Host 半侧，Cordis 插件入口（`apply`），注册 `weather` settings
-  namespace（`installSettingsSection`），供浏览器半侧持久化配置。
+  namespace（当前 provider 的 `installSection`；老版本 provider 的模块级
+  `installSettingsSection` 作为特性探测兜底），供浏览器半侧持久化配置。
 - `lib/client.js`：浏览器半侧，按 DSH 客户端模块系统的 lazy-CJS factory 格式构建：
 
   ```js
@@ -65,13 +66,21 @@ src/client/           # 浏览器半侧
   TrendChart.tsx      #   24h 温度 SVG 折线
 scripts/build.mjs     # esbuild 构建脚本（委托 build-lib.mjs）
 scripts/check-lib-sync.mjs  # 校验 lib/ 与 src/ 同步（已接入 npm run check）
+scripts/check-encoding.mjs  # 扫描/修复双重编码乱码（UTF-8 被当作 GBK 再存回）
+scripts/verify-bundle.cjs   # 产物契约断言（factory 头尾、体积、席位、WeatherBar）
+scripts/verify-features.cjs # 功能探针断言（feed 参数、供应商、暗色 token、React 未内联）
+scripts/smoke-client.cjs    # 在 vm 里真正跑一遍 factory，校验导出与 inject
 ```
 
 ## 校验
 
 ```sh
-npm run check        # typecheck → build → verify（bundle/feature 断言）→ check:lib-sync
+npm run check        # typecheck → check:encoding → build → verify（断言，失败即非零退出）→ check:lib-sync
 ```
+
+`verify` 里的每个探针都会在失败时 `process.exit(1)`：只会打印的脚本骗得过 CI，
+骗不过一次真实的产物损坏。`smoke-client.cjs` 会真正执行 bundle 的 factory，
+因此它也是唯一能发现「构建成功但模块导出坏了」的一步。
 
 `lib/` 是提交产物（git 安装无需执行构建脚本），因此**每次改 `src/` 都要重建并提交 `lib/`**；
 `check:lib-sync` 会重新构建到临时目录并逐字节比对，漏提交会直接失败。
@@ -79,7 +88,7 @@ npm run check        # typecheck → build → verify（bundle/feature 断言）
 ## 发布与收录
 
 本项目**不发布 npm**，纯 GitHub 收录：向 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
-仓库提 PR，在 `data/plugins/` 下新增 `QianLuo-Ly__dsh-weather.yml`（草稿见本目录
+仓库提 PR，在 `data/plugins/` 下新增 `QianLuo-Ly__dsh-weather.yml`（草稿见仓库根目录
 `.release/`）。合并后（约一天内）自动出现在 dsh-market 的「设置 → 插件市场」。
 
 发布新版本时：改 `package.json` 版本号（如需）、重新 `npm run check`、推送到

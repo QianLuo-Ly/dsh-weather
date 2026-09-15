@@ -50,7 +50,7 @@ import { Glyph, WeatherIcon, type GlyphName } from './icons'
 import { DailyList, DayDetailPanel, HourlyStrip, RainStrip, StatChip, TodayFacts, type TodayFactItem } from './panels'
 import { TrendChart } from './TrendChart'
 import { NUM, TOKEN, actionButton, baseButton, BANNER, iconButton, segmentButton, SHADOW } from './theme'
-import { tempText, unitLabel, windNumber, windText, windUnitLabel } from './units'
+import { tempNumber, tempText, unitLabel, windNumber, windText, windUnitLabel } from './units'
 
 export interface WeatherBarProps {
   scope: SettingsScope<WeatherConfig>
@@ -132,8 +132,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
       : feed.status
   const error = locationError ?? feed.error
 
-  useWeatherNotifications({ effective, data, placeName: name, stale: feed.stale })
-  useDailyBrief({ effective, data, placeName: name, stale: feed.stale })
+  useWeatherNotifications({ effective, data, location, placeName: name, stale: feed.stale })
+  useDailyBrief({ effective, data, location, placeName: name, stale: feed.stale })
   useTabTitle({ effective, data, status, placeName: name })
 
   // The transient toast under the chip: IP-drift switches and saved-city
@@ -222,7 +222,12 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     [data, units],
   )
   const advice = useMemo(() => (data === null ? null : weatherAdvice(data)), [data])
-  const trendValues = useMemo(() => data?.hourly.map((point) => point.temperature) ?? [], [data])
+  // The feed is metric, the chart plots what it is given and only labels it with
+  // `unitSuffix` — so convert here, or a °F axis would print °C numbers.
+  const trendValues = useMemo(
+    () => data?.hourly.map((point) => tempNumber(point.temperature, units)) ?? [],
+    [data, units],
+  )
   const trendLabels = useMemo(() => data?.hourly.map((point) => hourLabel(point.time)) ?? [], [data])
 
   if (!effective.enabled) return null
@@ -269,7 +274,11 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const gustTextValue = cur?.windGusts !== undefined ? windText(cur.windGusts, units) : undefined
   const dewPointTextValue = cur?.dewPoint !== undefined ? tempText(cur.dewPoint, units) : undefined
   const pressureTextValue = cur?.pressure !== undefined ? `${Math.round(cur.pressure)} hPa` : undefined
-  const visibilityTextValue = cur?.visibility !== undefined ? `${Math.round(cur.visibility)} km` : undefined
+  // Sub-10 km readings are what actually matter (fog, haze), so keep one decimal
+  // there instead of rounding 0.4 km to a reassuring "0 km".
+  const visibilityTextValue = cur?.visibility !== undefined
+    ? `${cur.visibility < 10 ? cur.visibility.toFixed(1) : Math.round(cur.visibility)} km`
+    : undefined
   const cloudTextValue = cur?.cloudCover !== undefined ? `${Math.round(cur.cloudCover)}%` : undefined
   const rainTotal = data?.daily[0]?.precipSum
   const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05 ? `${rainTotal.toFixed(1)} mm` : undefined

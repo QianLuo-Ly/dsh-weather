@@ -13,7 +13,9 @@ import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import {
   MAX_SAVED_LOCATIONS,
   placeKey,
+  REFRESH_RANGE,
   sanitizeSavedLocations,
+  sanitizeText,
   type SavedLocation,
   type WeatherConfig,
 } from '../config-shared'
@@ -42,9 +44,11 @@ const DRIFT_PROBE_INTERVAL_MS = 60 * 60_000
  * Matches the weather prefix this plugin writes into the tab title:
  * `<condition emoji> <temp> <name> — `, plus the legacy fixed-⛅ form used by
  * older bundles. Used only to strip our own prefix when capturing the app's
- * base title.
+ * base title. The optional sign matters: below 0 °C `tempText` yields `-5°C`,
+ * and a prefix we fail to recognise is adopted as the new base — so the title
+ * would grow a fresh copy of itself on every write.
  */
-const TITLE_PREFIX_RE = /^(☀️|🌤️|⛅|☁️|🌧️|❄️|🌨️|⛈️|🌙|🌡️|🌫️|🌦️) \d+°[CF] .+? — /
+const TITLE_PREFIX_RE = /^(☀️|🌤️|⛅|☁️|🌧️|❄️|🌨️|⛈️|🌙|🌡️|🌫️|🌦️) -?\d+°[CF] .+? — /
 
 /** Manual-mode display name reduced to city level (`广东省广州市番禺区` → `广东省广州市`). */
 function manualDisplayName(cityName: string | undefined): string {
@@ -126,7 +130,10 @@ export function useAutoLocation(options: {
   const persistLocation = useCallback((loc: GeoLocation): void => {
     writer.write('autoLatitude', loc.latitude)
     writer.write('autoLongitude', loc.longitude)
-    writer.write('autoCityName', loc.name)
+    // Composed from remote data (geocoder + province joining), so it can exceed
+    // the display-name budget; sanitize here or the write stores a value the read
+    // path then trims, leaving the stored document and the UI disagreeing.
+    writer.write('autoCityName', sanitizeText(loc.name) ?? '当前位置')
     writer.write('autoSource', loc.source)
   }, [writer])
 
@@ -169,8 +176,19 @@ export function useAutoLocation(options: {
       && location !== null
       && (effective.locationMode === 'manual'
         ? location.source === 'manual' && location.latitude === effective.latitude && location.longitude === effective.longitude
-        : location.latitude === effective.autoLatitude && location.longitude === effective.autoLongitude)
-    if (samePlace) return
+        // The source must be checked too: manual→auto at identical coordinates
+        // would otherwise keep `source: 'manual'` and silently drop the
+        // GPS/IP badge in the popover header.
+        : location.source !== 'manual' && location.latitude === effective.autoLatitude && location.longitude === effective.autoLongitude)
+    if (samePlace) {
+      // The early-out still owes the bookkeeping a resolve would have done: a
+      // superseded run can leave `locating`/`error` set, and returning without
+      // clearing them strands the chip on "定位中…" forever (the control that
+      // would re-trigger a resolve lives behind the ready state).
+      setLocating(false)
+      setError(null)
+      return
+    }
     let cancelled = false
     setLocating(true)
     setError(null)
@@ -400,7 +418,7 @@ export function useWeatherFeed(options: {
   // Auto-refresh on the configured interval (sanitized, so it is always ≥ 5).
   useEffect(() => {
     if (!effective.enabled) return
-    const id = window.setInterval(() => setTick((n) => n + 1), Math.max(5, effective.refreshMinutes) * 60_000)
+    const id = window.setInterval(() => setTick((n) => n + 1), Math.max(REFRESH_RANGE.min, effective.refreshMinutes) * 60_000)
     return () => window.clearInterval(id)
   }, [effective.refreshMinutes, effective.enabled])
 
@@ -719,6 +737,22 @@ export function useSavedLocations(options: {
 // ── Notifications: severe weather ────────────────────────────────────────────
 
 /**
+ * Whether a fetched payload belongs to the location currently displayed.
+ *
+ * `fetchWeather` stores the very `GeoLocation` object it was given, so identity
+ * is the honest test — and it is deliberately stricter than comparing
+ * coordinates, which would treat two distinct resolutions of the same place as
+ * interchangeable. Consumers that re-run on a NAME or config change (a city
+ * switch updates `placeName` one commit before the new payload arrives) must use
+ * this, or they act on the previous city's weather: a notification titled with
+ * the new city carrying the old city's conditions, and a dedupe key that then
+ * suppresses the real alert.
+ */
+function payloadMatchesLocation(data: WeatherData | null, location: GeoLocation | null): boolean {
+  return data !== null && location !== null && data.location === location
+}
+
+/**
  * Fire a browser notification when a severe-weather alert appears, at most once
  * per alert combination per hour (4 h for lead-time `*-soon` alerts), plus the
  * rain-soon reminder. Requires notification permission.
@@ -729,15 +763,18 @@ export function useSavedLocations(options: {
 export function useWeatherNotifications(options: {
   effective: WeatherConfig
   data: WeatherData | null
+  location: GeoLocation | null
   placeName: string
   /** True when `data` is a stale snapshot (last refresh failed). */
   stale: boolean
 }): void {
-  const { effective, data, placeName, stale } = options
+  const { effective, data, location, placeName, stale } = options
   const notifiedAt = useRef(new Map<string, number>())
 
   useEffect(() => {
     if (!effective.alertsEnabled || data === null) return
+    // The payload must belong to the location we are about to name in it.
+    if (!payloadMatchesLocation(data, location)) return
     // Never notify from a snapshot whose refresh failed — it may describe
     // conditions that already changed.
     if (stale) return
@@ -773,7 +810,7 @@ export function useWeatherNotifications(options: {
     } catch {
       // notification construction can throw in restricted contexts — ignore
     }
-  }, [data, effective.alertsEnabled, effective.units, placeName, stale])
+  }, [data, location, effective.alertsEnabled, effective.units, placeName, stale])
 }
 
 // ── Notifications: daily brief ──────────────────────────────────────────────
@@ -850,11 +887,12 @@ function clockMinutes(clock: string): number | undefined {
 export function useDailyBrief(options: {
   effective: WeatherConfig
   data: WeatherData | null
+  location: GeoLocation | null
   placeName: string
   /** True when `data` is a stale snapshot (last refresh failed). */
   stale: boolean
 }): void {
-  const { effective, data, placeName, stale } = options
+  const { effective, data, location, placeName, stale } = options
   const sentRef = useRef(new Set<string>())
   // Latest payload/staleness read by the minute tick without restarting it on
   // every refresh (restarting made each auto-refresh run an immediate check).
@@ -862,14 +900,20 @@ export function useDailyBrief(options: {
   dataRef.current = data
   const staleRef = useRef(stale)
   staleRef.current = stale
+  const locationRef = useRef(location)
+  locationRef.current = location
 
   useEffect(() => {
     if (!effective.enabled || !effective.briefEnabled) return
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
 
     const build = (slot: 'morning' | 'evening'): { title: string; body: string } | null => {
       const current = dataRef.current
       if (current === null) return null
+      // The brief names `placeName` but reads this payload: they must be the same
+      // city, or a switch inside the catch-up window burns the day's slot with
+      // the previous city's weather (and the localStorage mark then suppresses
+      // the correct brief).
+      if (!payloadMatchesLocation(current, locationRef.current)) return null
       const day = slot === 'morning' ? current.daily[0] : current.daily[1]
       if (day === undefined) return null
       const condition = describeCondition(day.weatherCode, true)
@@ -884,6 +928,12 @@ export function useDailyBrief(options: {
     const check = (): void => {
       const now = new Date()
       if (staleRef.current) return
+      // The permission is re-read on every tick, not only when the effect mounts.
+      // The gate used to sit above the timer, so granting permission while the
+      // brief was being enabled (the common first-run path: the write lands while
+      // the permission dialog is still open) left the effect armed with
+      // 'default' and no timer at all — the brief stayed silent until a reload.
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
       const nowMinutes = now.getHours() * 60 + now.getMinutes()
       for (const slot of ['morning', 'evening'] as const) {
         const wanted = slot === 'morning' ? effective.briefMorning : effective.briefEvening

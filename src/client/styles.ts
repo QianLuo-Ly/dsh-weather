@@ -27,21 +27,26 @@ const STYLE_TEXT = [
   '  --dshw-fg-muted: rgba(255, 255, 255, 0.8);',
   '}',
   // The chip lives inside the conversation header, so hover only brightens —
-  // a translate would nudge the header row mid-layout.
+  // a translate would nudge the header row mid-layout. `filter` alone is not
+  // enough: the platform's light theme fills the surface with pure white, and
+  // no brightness multiplier can lift a clamped channel, so a real background
+  // tint carries the affordance.
   '.dshw-bar { transition: filter 0.15s ease, background-color 0.15s ease; }',
-  '.dshw-bar:hover { filter: brightness(1.08); }',
+  '.dshw-bar:hover { filter: brightness(1.08); background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06)); }',
   '.dshw-popover { animation: dshw-pop-in 0.15s ease; }',
   // ── City picker (settings page) ──────────────────────────────────────────
   // Pseudo-classes cannot be expressed inline, so every interactive state of
   // the suggestion list lives here. The active row is driven by keyboard
   // navigation (aria-activedescendant), which is why it needs its own rule
-  // rather than relying on :hover.
+  // rather than relying on :hover. Both use the interactive tokens: the
+  // bg-layer tokens are pure white in light mode, which made the highlight
+  // invisible exactly where the keyboard path depends on seeing it.
   '.dshw-ac-panel { animation: dshw-pop-in 0.12s ease; }',
   '.dshw-ac-row { transition: background-color 0.1s ease; }',
-  '.dshw-ac-row:hover { background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.05)); }',
-  '.dshw-ac-row[data-active="true"] { background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.07)); }',
+  '.dshw-ac-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06)); }',
+  '.dshw-ac-row[data-active="true"] { background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.1)); }',
   '.dshw-ac-star { transition: background-color 0.1s ease, color 0.1s ease; }',
-  '.dshw-ac-star:not(:disabled):hover { background: var(--dsw-alias-bg-layer-2, rgba(0, 0, 0, 0.08)); }',
+  '.dshw-ac-star:not(:disabled):hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.08)); }',
   '.dshw-ac-panel::-webkit-scrollbar { width: 8px; }',
   '.dshw-ac-panel::-webkit-scrollbar-track { background: transparent; }',
   '.dshw-ac-panel::-webkit-scrollbar-thumb {',

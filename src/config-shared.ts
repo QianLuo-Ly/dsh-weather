@@ -135,6 +135,12 @@ const UNSAFE_TEXT_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2
  * Normalize a user-facing text field at the trust boundary: drop control /
  * invisible characters, trim, and cap the length by code point (so an emoji is
  * never cut into a lone surrogate). Returns undefined for empty/non-string.
+ *
+ * The cap is the client's own budget, deliberately not mirrored by a Host
+ * `.max()`: the schema must accept whatever an older version stored, and a
+ * schema bound measured in UTF-16 units would reject a value this function
+ * blessed (40 code points can be 80 units) — a refusal the scoped transport
+ * swallows, so the write would fail forever with no way to fix it.
  */
 export function sanitizeText(value: unknown, maxLength = MAX_NAME_LENGTH): string | undefined {
   if (typeof value !== 'string') return undefined

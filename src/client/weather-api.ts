@@ -80,7 +80,7 @@ export interface CurrentWeather {
   pressure?: number
   /** Total cloud cover (0–100 %). */
   cloudCover?: number
-  /** Horizontal visibility (km). */
+  /** Horizontal visibility (km). The feed reports metres; converted on ingest. */
   visibility?: number
   /** Dew point temperature (°C). */
   dewPoint?: number
@@ -171,14 +171,35 @@ export interface RainScan {
  * are unit-independent); a step at/above {@link RAIN_MM_PER_15MIN} counts as
  * rain.
  */
-function scanRain(steps: MinutelyPoint[]): RainScan {
+/**
+ * Scan minutely precipitation steps for the next rain: is it raining now, and
+ * if not, when does the first wet step start and how long does the wet spell
+ * last. Steps are in mm per 15 minutes (the API's native unit — precipitation
+ * stays metric even when the display unit is °F/mph, so thresholds and totals
+ * are unit-independent); a step at/above {@link RAIN_MM_PER_15MIN} counts as
+ * rain.
+ *
+ * @param steps - the 15-minute steps, the first being the one CONTAINING now.
+ * @param elapsedInFirstStep - minutes already elapsed inside `steps[0]`. The
+ *   onset of a later step is measured from the current instant, not from the
+ *   start of step 0; without this the reported onset is late by that amount
+ *   (up to 15 minutes — enough to tell someone rain is 15 minutes away when it
+ *   is about to start).
+ */
+function scanRain(steps: MinutelyPoint[], elapsedInFirstStep = 0): RainScan {
   const windowMinutes = steps.length * MINUTE_STEP_MIN
   const wet = (i: number): boolean => steps[i] !== undefined && steps[i].precipitation >= RAIN_MM_PER_15MIN
   if (steps.length === 0) return { rainingNow: false, windowMinutes }
   if (wet(0)) {
     let end = 1
     while (end < steps.length && wet(end)) end += 1
-    return { rainingNow: true, durationMinutes: end * MINUTE_STEP_MIN, windowMinutes }
+    return {
+      rainingNow: true,
+      // The current step may already be partly over; do not claim rain for the
+      // full 15 minutes of a step whose dry part has not happened yet.
+      durationMinutes: Math.max(0, end * MINUTE_STEP_MIN - elapsedInFirstStep),
+      windowMinutes,
+    }
   }
   for (let start = 1; start < steps.length; start += 1) {
     if (!wet(start)) continue
@@ -186,7 +207,7 @@ function scanRain(steps: MinutelyPoint[]): RainScan {
     while (end < steps.length && wet(end)) end += 1
     return {
       rainingNow: false,
-      onsetMinutes: start * MINUTE_STEP_MIN,
+      onsetMinutes: Math.max(0, Math.round(start * MINUTE_STEP_MIN - elapsedInFirstStep)),
       durationMinutes: (end - start) * MINUTE_STEP_MIN,
       windowMinutes,
     }
@@ -289,7 +310,8 @@ function containingGridIndex(times: string[], current: string | undefined): numb
 /**
  * Query one IP geolocation endpoint (browser-CORS friendly, no key). Returns
  * null on any failure so callers can combine providers. Field names differ
- * across providers (`latitude/longitude` vs `lat/lon`), so both are read.
+ * across providers (`latitude/longitude` vs `lat/lon`, `city/region` vs
+ * `cityName/regionName`), so both spellings are read.
  */
 async function sampleIpLocation(url: string): Promise<GeoLocation | null> {
   try {
@@ -297,7 +319,9 @@ async function sampleIpLocation(url: string): Promise<GeoLocation | null> {
     if (!res.ok) return null
     const json = res.json as {
       city?: string
+      cityName?: string
       region?: string
+      regionName?: string
       latitude?: string | number
       longitude?: string | number
       lat?: string | number
@@ -314,10 +338,15 @@ async function sampleIpLocation(url: string): Promise<GeoLocation | null> {
     // Empty-string coordinates must not silently become the (0,0) sample in
     // the Gulf of Guinea.
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
-    const city = (json.city ?? '').trim()
-    const region = (json.region ?? '').trim()
+    // Provider field names differ: freeipapi returns `cityName`/`regionName`
+    // rather than `city`/`region` (ipapi.is and ipwho.is use the short form), so
+    // read both — otherwise that sample can never contribute a name and the
+    // display falls back to the "当前位置" placeholder whenever it wins the vote.
+    const city = (json.city ?? json.cityName ?? '').trim()
+    const region = (json.region ?? json.regionName ?? '').trim()
     const name = city !== '' ? city : region !== '' ? region : '当前位置'
-    return { name, latitude, longitude, source: 'ip' }
+    const rounded = roundCoordinates(latitude, longitude)
+    return { name, latitude: rounded.latitude, longitude: rounded.longitude, source: 'ip' }
   } catch {
     return null
   }
@@ -356,7 +385,10 @@ async function resolveLocationByIp(): Promise<GeoLocation> {
   )
   const latitude = cluster.reduce((sum, sample) => sum + sample.latitude, 0) / cluster.length
   const longitude = cluster.reduce((sum, sample) => sum + sample.longitude, 0) / cluster.length
-  return { name: best.name, latitude, longitude, source: 'ip' }
+  // The cluster mean reintroduces sub-100 m digits even though each sample was
+  // already rounded, so round the result too — this value is what gets persisted.
+  const rounded = roundCoordinates(latitude, longitude)
+  return { name: best.name, latitude: rounded.latitude, longitude: rounded.longitude, source: 'ip' }
 }
 
 /**
@@ -410,11 +442,25 @@ interface ChineseAddress {
 }
 
 /**
+ * Reduce a resolved coordinate to ~100 m (`placeKey`'s precision).
+ *
+ * Weather and reverse geocoding are the same at this scale — a forecast grid
+ * cell is kilometres wide and the reverse geocoder's answer is reduced to
+ * city/district text — so nothing user-visible is lost, while a device-precise
+ * fix stops being written into the on-disk settings document, sent to the
+ * geocoder, or forwarded to the weather API.
+ */
+function roundCoordinates(latitude: number, longitude: number): { latitude: number; longitude: number } {
+  return { latitude: Math.round(latitude * 1000) / 1000, longitude: Math.round(longitude * 1000) / 1000 }
+}
+
+/**
  * Reverse-geocode coordinates to a Chinese administrative address
  * (BigDataCloud, `localityLanguage=zh-Hans` → simplified Chinese).
  */
 async function reverseGeocodeAddress(latitude: number, longitude: number): Promise<ChineseAddress> {
-  const url = `${REVERSE_GEO_URL}?latitude=${latitude}&longitude=${longitude}&localityLanguage=zh-Hans`
+  const { latitude: lat, longitude: lon } = roundCoordinates(latitude, longitude)
+  const url = `${REVERSE_GEO_URL}?latitude=${lat}&longitude=${lon}&localityLanguage=zh-Hans`
   const res = await apiFetch(url)
   if (!res.ok) throw new Error(`反向地理编码响应异常（HTTP ${res.status}）`)
   const json = res.json as {
@@ -518,10 +564,11 @@ function resolveLocationByBrowser(): Promise<GeoLocation> {
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        const { latitude, longitude } = roundCoordinates(position.coords.latitude, position.coords.longitude)
         resolve({
           name: '当前位置',
-          latitude: position.coords.latitude,
-          longitude: position.coords.longitude,
+          latitude,
+          longitude,
           source: 'gps',
           accuracy: position.coords.accuracy,
         })
@@ -815,6 +862,8 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       time?: string[]
       precipitation?: (number | null)[]
     }
+    /** Location's UTC offset in seconds — required to place "now" inside a step. */
+    utc_offset_seconds?: number
   } | null
 
   if (json === null) throw new Error('天气服务暂未返回数据，请稍后重试')
@@ -848,7 +897,22 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
         precipitation: precipitation[minuteFrom + index] ?? 0,
       }))
     minutely = steps
-    rainSoon = scanRain(steps)
+    // `steps[0]` is the step containing now, so an onset index counts from that
+    // step's START. Subtract how much of it has already passed, or every onset
+    // is reported late (by up to one full step). The grid times are the
+    // location's local wall clock, so the offset — not the browser's own clock —
+    // is what turns them into a real instant.
+    const first = steps[0]
+    let elapsed = 0
+    if (first !== undefined) {
+      const offsetSeconds = json.utc_offset_seconds
+      if (typeof offsetSeconds === 'number' && Number.isFinite(offsetSeconds)) {
+        const firstStepInstant = Date.parse(`${first.time}:00Z`) - offsetSeconds * 1000
+        const since = (Date.now() - firstStepInstant) / 60_000
+        if (Number.isFinite(since)) elapsed = Math.min(MINUTE_STEP_MIN, Math.max(0, since))
+      }
+    }
+    rainSoon = scanRain(steps, elapsed)
   }
 
   // Air quality is additive: parse it after the main JSON so the forecast is
@@ -878,7 +942,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       windGusts: current.wind_gusts_10m ?? undefined,
       pressure: current.surface_pressure ?? undefined,
       cloudCover: current.cloud_cover ?? undefined,
-      visibility: current.visibility ?? undefined,
+      // Open-Meteo reports visibility in METRES (`current_units.visibility: "m"`);
+      // the field's contract is km, so convert here — rendering the raw value
+      // showed "能见度 4500 km" for 4.5 km.
+      visibility: current.visibility === null || current.visibility === undefined
+        ? undefined
+        : current.visibility / 1000,
       dewPoint: current.dew_point_2m ?? undefined,
       precipitation: current.precipitation ?? undefined,
     },

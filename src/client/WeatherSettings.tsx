@@ -127,11 +127,21 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   // Seed drafts from the stored config, but only the field that actually
   // changed — a commit (or a city search) updates its own input without
   // clobbering another input's uncommitted draft.
+  //
+  // The FIRST run must seed unconditionally. This section mounts only when the
+  // settings panel is opened, long after the namespace resolved, so the stored
+  // coordinates are already present on the very first render: a change-detecting
+  // ref initialised from that same render can never observe a difference, which
+  // left 纬度/经度 rendering EMPTY for an existing manual location — and a bare
+  // focus+blur on an empty field then wrote a clear, wiping the coordinate.
   const prevCoordsRef = useRef({ lat: effective.latitude, lon: effective.longitude })
+  const coordsSeededRef = useRef(false)
   useEffect(() => {
     const prev = prevCoordsRef.current
-    if (effective.latitude !== prev.lat) setLatInput(effective.latitude?.toString() ?? '')
-    if (effective.longitude !== prev.lon) setLonInput(effective.longitude?.toString() ?? '')
+    const first = !coordsSeededRef.current
+    if (first || effective.latitude !== prev.lat) setLatInput(effective.latitude?.toString() ?? '')
+    if (first || effective.longitude !== prev.lon) setLonInput(effective.longitude?.toString() ?? '')
+    coordsSeededRef.current = true
     prevCoordsRef.current = { lat: effective.latitude, lon: effective.longitude }
   }, [effective.latitude, effective.longitude])
 
@@ -196,7 +206,10 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   useEffect(() => {
     if (skipNextSearchRef.current) {
       // Programmatic value (a picked result) — do not re-open the dropdown.
+      // The superseded run's cleanup set `cancelled`, so its `.finally` never
+      // cleared the flag; clear it here or "搜索中…" sticks until the next search.
       skipNextSearchRef.current = false
+      setSearching(false)
       return
     }
     const trimmed = search.trim()
@@ -297,6 +310,15 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     }
     const text = input.value.trim()
     if (text === '') {
+      // A blank field means "clear the coordinate" only when the user actually
+      // emptied it. An untouched blank field is a rendering/state artefact, and
+      // treating it as a deliberate clear would silently erase a stored
+      // coordinate — so restore the committed value instead of writing an unset.
+      const stored = effective[kind]
+      if (stored !== undefined) {
+        revertDraft()
+        return
+      }
       // Clearing coordinates also drops the saved-city highlight (custom/absent).
       commit([], [kind, 'activeSavedId'])
       return
@@ -497,6 +519,10 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                 placeholder="输入城市名，如：北京 / Beijing"
                 onChange={(event) => { setSearch(event.target.value); setActiveIndex(0) }}
                 onKeyDown={(event) => {
+                  // An IME confirming a candidate also delivers Enter (and, on
+                  // some browsers, a 229 keyCode). Acting on those would replace
+                  // the user's in-progress pinyin with whichever row is active.
+                  if (event.nativeEvent.isComposing || event.keyCode === 229) return
                   // Arrow keys drive the active row while focus stays in the
                   // input, so typing, picking and starring never fight for focus.
                   if (event.key === 'Escape') { setSuggestions([]); return }
