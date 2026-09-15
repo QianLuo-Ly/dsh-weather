@@ -80,7 +80,7 @@ export const MAX_ID_LENGTH = 64
 export const BRIEF_TIMES = { morning: '08:00', evening: '20:00' } as const
 
 /** `HH:MM` (00:00–23:59) pattern shared by the Host schema and the client parser. */
-export const CLOCK_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+export const CLOCK_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/
 
 /**
  * Fallback configuration matching the Host schema defaults, used until the
@@ -98,11 +98,19 @@ export const DEFAULT_WEATHER_CONFIG: WeatherConfig = {
   briefEvening: BRIEF_TIMES.evening,
 }
 
-/** Accept only `HH:MM` (00:00–23:59); anything else is undefined. */
+/**
+ * Accept only `HH:MM` (00:00–23:59); anything else is undefined.
+ *
+ * The normalized value is the MATCHED TEXT, never rebuilt from capture groups:
+ * the pattern is anchored, so a match already is the canonical `HH:MM`. Rebuilding
+ * from `match[1]`/`match[2]` silently produced `"HH:undefined"` the moment a
+ * group was missing from the pattern — a corrupted value that then failed the
+ * Host schema on every write.
+ */
 export function parseClockTime(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined
-  const match = CLOCK_TIME_PATTERN.exec(value.trim())
-  return match === null ? undefined : `${match[1]}:${match[2]}`
+  const trimmed = value.trim()
+  return CLOCK_TIME_PATTERN.test(trimmed) ? trimmed : undefined
 }
 
 /**
