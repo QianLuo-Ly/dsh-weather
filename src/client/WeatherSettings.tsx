@@ -31,8 +31,18 @@ import { Glyph } from './icons'
 import { useSavedLocations, writeVerified, type NoticeKind } from './hooks'
 import { SHADOW, TOKEN } from './theme'
 
+/**
+ * Diagnose an already-refused write: re-read the authority, report what the
+ * Host says, and retry the same edit without the revision fence. Supplied by
+ * the plugin entry (it needs the remote service, which this view does not).
+ */
+export interface WriteProbe {
+  (fields: Array<[string, unknown]>, clears: string[]): Promise<{ landed: boolean; detail: string }>
+}
+
 export interface WeatherSettingsSectionProps {
   scope: SettingsScope<WeatherConfig>
+  probe: WriteProbe
 }
 
 // Design tokens — single source is theme.ts; these aliases only shorten reads.
@@ -48,7 +58,7 @@ const OK = '#2f9e44'
 interface Notice { text: string; kind: NoticeKind }
 
 export function WeatherSettingsSection(props: WeatherSettingsSectionProps): ReactElement {
-  const { scope } = props
+  const { scope, probe } = props
   const [config, setConfig] = useState<WeatherConfig | undefined>(() => sanitizeConfig(scope.getSnapshot().value))
   const [search, setSearch] = useState('')
   const [suggestions, setSuggestions] = useState<GeoLocation[]>([])
@@ -172,23 +182,31 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
    * `writeVerified` re-issues the batch once before reporting: the routine
    * refusal here is the Host's revision fence going stale behind an out-of-band
    * write (another tab, a hand-edited document), and the transport has already
-   * re-read the authority by the time it settles. Only a write that fails twice
-   * reaches the notice — which asks for a refresh, since retrying by hand is
-   * exactly what has just been done automatically.
+   * re-read the authority by the time it settles. When even that fails the
+   * refusal is not routine, and the transport has thrown away the reason —
+   * so fall back to the probe, which reports the Host's own words and retries
+   * unfenced. A bare "retry later" would leave the user (and us) with nothing.
    */
   const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): void => {
     if (!scope.getSnapshot().writable) {
       notify('当前连接不支持修改设置（只读）', 'err')
       return
     }
-    void writeVerified(
-      scope,
-      fields.map(([field, value]) => [field as string, value]),
-      clears.map((field) => field as string),
-    ).then((accepted) => {
-      if (!accepted) notify('该设置未被保存，请刷新页面后重试', 'err')
+    const rawFields = fields.map(([field, value]) => [field as string, value] as [string, unknown])
+    const rawClears = clears.map((field) => field as string)
+    void writeVerified(scope, rawFields, rawClears).then((accepted) => {
+      if (accepted) return
+      const clientRevision = scope.getSnapshot().revision
+      void probe(rawFields, rawClears).then((result) => {
+        notify(
+          result.landed
+            ? `已保存（该写入被版本栅栏挡住，已改用无栅栏写入；客户端 rev=${clientRevision ?? '?'}）`
+            : `该设置未被保存：${result.detail}｜客户端 rev=${clientRevision ?? '?'}`,
+          result.landed ? 'ok' : 'err',
+        )
+      })
     })
-  }, [scope, notify])
+  }, [scope, notify, probe])
 
   const set = useCallback((field: keyof WeatherConfig, value: unknown): void => {
     commit([[field, value]])

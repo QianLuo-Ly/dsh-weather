@@ -22,11 +22,80 @@ import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { sanitizeConfig, WEATHER_NS, type WeatherConfig } from '../config-shared'
 import { WeatherBar } from './WeatherBar'
-import { WeatherSettingsSection } from './WeatherSettings'
+import { WeatherSettingsSection, type WriteProbe } from './WeatherSettings'
 import { ensureWeatherStyles } from './styles'
 
 /** Cordis service injection for the client plugin fiber. */
 export const inject = ['slots', 'settingsScope']
+
+/** Minimal `ctx.remote.settings` surface used by the refused-write probe. */
+interface RemoteSettingsFace {
+  describe: () => Promise<
+    | { ok: true; value: { namespaces?: Array<{ ns: string; revision?: number; user?: unknown }> } }
+    | { ok: false; error: { message: string } }
+  >
+  mutate: (
+    ns: string,
+    ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>,
+    expectedRevision: number | undefined,
+  ) => Promise<{ ok: true } | { ok: false; error: { message: string } }>
+}
+
+/**
+ * Build the refused-write probe.
+ *
+ * `settingsScope`'s transport deliberately swallows a Host refusal: the write
+ * promise settles normally and the only signal is a snapshot that did not
+ * change, so a caller cannot tell "rejected by the revision fence" from
+ * "rejected by the schema" from "the gateway never took it". This probe
+ * re-reads the authority and reports what the Host actually says, then attempts
+ * the same edit WITHOUT the revision fence. The fence is precisely what makes a
+ * refusal opaque (the transport always attaches one), and dropping it is also
+ * the one remaining way to land an edit the fenced path keeps losing.
+ *
+ * `remote` is read lazily through `ctx.get` so a deployment without the
+ * settings gateway cannot block plugin activation.
+ *
+ * @param ctx - the plugin's client context.
+ * @returns a probe invoked with the fields/clears of an already-refused write.
+ */
+function createWriteProbe(ctx: Context): WriteProbe {
+  const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+  return async (fields, clears) => {
+    const remote = (ctx as unknown as { get?: (name: string) => { settings?: RemoteSettingsFace } | undefined })
+      .get?.('remote')
+    const settings = remote?.settings
+    if (settings === undefined) return { landed: false, detail: 'remote.settings 不可用' }
+    let serverRevision: number | undefined
+    let stored = '未知'
+    try {
+      const described = await settings.describe()
+      if (described.ok) {
+        const row = (described.value.namespaces ?? []).find((candidate) => candidate.ns === WEATHER_NS)
+        serverRevision = row?.revision
+        const user = row?.user as Record<string, unknown> | undefined
+        stored = fields.map(([field]) => `${field}=${JSON.stringify(user?.[field])}`).join(' ') || '—'
+      } else {
+        stored = `describe 被拒：${described.error.message}`
+      }
+    } catch (error) {
+      stored = `describe 异常：${message(error)}`
+    }
+    const ops = [
+      ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
+      ...clears.map((field) => ({ op: 'unset' as const, path: [field] })),
+    ]
+    const context = `服务端 rev=${serverRevision ?? '?'} 服务端已存 ${stored}`
+    try {
+      const response = await settings.mutate(WEATHER_NS, ops, undefined)
+      return response.ok
+        ? { landed: true, detail: context }
+        : { landed: false, detail: `Host 拒绝（无栅栏）：${response.error.message}｜${context}` }
+    } catch (error) {
+      return { landed: false, detail: `mutate 异常：${message(error)}｜${context}` }
+    }
+  }
+}
 
 /** Client plugin entry: bind the settings scope once and mount both surfaces. */
 export function apply(ctx: Context): void {
@@ -38,6 +107,7 @@ export function apply(ctx: Context): void {
     // missing field (e.g. `refreshMinutes`) can never surface as NaN upstream.
     decode: (section) => sanitizeConfig(section as Partial<WeatherConfig> | undefined),
   })
+  const probe = createWriteProbe(ctx)
 
   // Seat orders are relative within each slot — see ui-conversation /
   // ui-settings for the other registered entries. Keep these two deliberate:
@@ -55,6 +125,6 @@ export function apply(ctx: Context): void {
     id: 'weather',
     order: 90,
     label: '天气',
-    inject: () => ({ scope }),
+    inject: () => ({ scope, probe }),
   }, WeatherSettingsSection))
 }
