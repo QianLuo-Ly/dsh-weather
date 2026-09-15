@@ -46,7 +46,7 @@ interface RemoteSettingsFace {
   mutate: (
     ns: string,
     ops: Array<{ op: 'set' | 'unset'; path: string[]; value?: unknown }>,
-    expectedRevision: number | undefined,
+    expectedRevision?: number,
   ) => Promise<
     | { ok: true; value: { revision?: number; value?: unknown } }
     | { ok: false; error: { message: string } }
@@ -87,31 +87,43 @@ function createWriteProbe(ctx: Context): WriteProbe {
       ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
       ...clears.map((field) => ({ op: 'unset' as const, path: [field] })),
     ]
+
+    /**
+     * Read the authority's CURRENT revision and send exactly that back.
+     *
+     * This is the whole fix. The Host refuses a write whose `expectedRevision`
+     * differs from its own `registration.revision`, and the value the scoped
+     * transport carries is the one it last read — which is exactly what goes
+     * stale when the namespace re-registers (a `dsh web` restart resets the
+     * counter to 0) while the page keeps its number. Re-reading here and echoing
+     * the authority's own revision makes that mismatch impossible.
+     *
+     * Omitting the argument is NOT an alternative: a remote call cannot carry
+     * `undefined` through its payload, so the Host would receive something
+     * non-`undefined` (e.g. `null`) and compare it as a real revision — a
+     * guaranteed conflict. So the third argument is passed only when describe
+     * actually produced a number.
+     */
+    let revision: number | undefined
+    try {
+      const described = await settings.describe()
+      if (described.ok) {
+        revision = (described.value.namespaces ?? []).find((row) => row.ns === WEATHER_NS)?.revision
+      }
+    } catch {
+      revision = undefined
+    }
+
     let response: Awaited<ReturnType<RemoteSettingsFace['mutate']>>
     try {
-      response = await settings.mutate(WEATHER_NS, ops, undefined)
+      response = revision === undefined
+        ? await settings.mutate(WEATHER_NS, ops)
+        : await settings.mutate(WEATHER_NS, ops, revision)
     } catch (error) {
       return { ok: false, detail: `mutate 异常：${message(error)}` }
     }
     if (response.ok) return { ok: true, value: response.value.value }
-    // Refused even without the fence: report the Host's own words plus the
-    // state it holds, which is what separates "value rejected" from anything
-    // else. Reached only on the failure path, so the extra read is free.
-    let detail = `Host 拒绝（无栅栏）：${response.error.message}`
-    try {
-      const described = await settings.describe()
-      if (described.ok) {
-        const row = (described.value.namespaces ?? []).find((candidate) => candidate.ns === WEATHER_NS)
-        const user = row?.user as Record<string, unknown> | undefined
-        const stored = fields.map(([field]) => `${field}=${JSON.stringify(user?.[field])}`).join(' ')
-        detail += `｜服务端 rev=${row?.revision ?? '?'} 服务端已存 ${stored === '' ? '—' : stored}`
-      } else {
-        detail += `｜describe 被拒：${described.error.message}`
-      }
-    } catch (error) {
-      detail += `｜describe 异常：${message(error)}`
-    }
-    return { ok: false, detail }
+    return { ok: false, detail: `Host 拒绝：${response.error.message}｜服务端 rev=${revision ?? '?'}` }
   }
 }
 
