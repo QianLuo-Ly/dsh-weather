@@ -60,6 +60,9 @@ const OK = '#2f9e44'
 
 interface Notice { text: string; kind: NoticeKind }
 
+/** The two `HH:MM` brief times, in `WeatherConfig` spelling. */
+type ClockFieldName = 'briefMorning' | 'briefEvening'
+
 export function WeatherSettingsSection(props: WeatherSettingsSectionProps): ReactElement {
   const { scope, probe } = props
   const [config, setConfig] = useState<WeatherConfig | undefined>(() => sanitizeConfig(scope.getSnapshot().value))
@@ -76,6 +79,14 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   const [lonInput, setLonInput] = useState('')
   const [nameInput, setNameInput] = useState('')
   const [refreshInput, setRefreshInput] = useState(DEFAULT_WEATHER_CONFIG.refreshMinutes)
+  /**
+   * Optimistic draft for the two brief times. Both selects are controlled by the
+   * stored config, so a pick would visibly snap back for a whole write round trip
+   * — and stay reverted forever when the write is refused (a stale revision fence
+   * the scoped transport cannot refresh). The draft keeps the user's own choice on
+   * screen until the snapshot catches up with it.
+   */
+  const [clockDraft, setClockDraft] = useState<Partial<Record<ClockFieldName, string>>>({})
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
   const [permission, setPermission] = useState<NotificationPermission>(() => (
     typeof Notification !== 'undefined' ? Notification.permission : 'denied'
@@ -92,6 +103,17 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     setNotice({ text, kind })
   }, [])
   const clearNotice = useCallback((): void => setNotice(null), [])
+
+  /** Retract one clock draft, so the control falls back to the stored value.
+   * `expected` guards against dropping a newer pick that already replaced it. */
+  const dropClockDraft = useCallback((field: ClockFieldName, expected?: string): void => {
+    setClockDraft((prev) => {
+      if (prev[field] === undefined || (expected !== undefined && prev[field] !== expected)) return prev
+      const next = { ...prev }
+      delete next[field]
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     const sync = (): void => {
@@ -120,6 +142,22 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   useEffect(() => {
     setRefreshInput(effective.refreshMinutes)
   }, [effective.refreshMinutes])
+
+  // Retire each clock draft once the stored config has caught up with it (the
+  // write landed), keeping only the ones still waiting. Returning the previous
+  // object when nothing changed keeps this from re-rendering on every sync.
+  useEffect(() => {
+    setClockDraft((prev) => {
+      const next: Partial<Record<ClockFieldName, string>> = {}
+      if (prev.briefMorning !== undefined && prev.briefMorning !== effective.briefMorning) {
+        next.briefMorning = prev.briefMorning
+      }
+      if (prev.briefEvening !== undefined && prev.briefEvening !== effective.briefEvening) {
+        next.briefEvening = prev.briefEvening
+      }
+      return next.briefMorning === prev.briefMorning && next.briefEvening === prev.briefEvening ? prev : next
+    })
+  }, [effective.briefMorning, effective.briefEvening])
 
   // Manual↔auto switches must not leave a stale suggestion dropdown behind.
   useEffect(() => {
@@ -202,29 +240,33 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
    * subscription never delivers the value it just stored. Reading the value
    * back from the write answer is what makes the panel show the truth in that
    * state instead of snapping back.
+   *
+   * @returns whether the authority now holds the requested state — a caller
+   *   with an optimistic draft uses this to keep or retract it.
    */
-  const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): void => {
+  const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): Promise<boolean> => {
     if (!scope.getSnapshot().writable) {
       notify('当前连接不支持修改设置（只读）', 'err')
-      return
+      return Promise.resolve(false)
     }
     const rawFields = fields.map(([field, value]) => [field as string, value] as [string, unknown])
     const rawClears = clears.map((field) => field as string)
-    void writeVerified(scope, rawFields, rawClears).then((accepted) => {
-      if (accepted) return
-      void probe(rawFields, rawClears).then((result) => {
+    return writeVerified(scope, rawFields, rawClears).then((accepted) => {
+      if (accepted) return true
+      return probe(rawFields, rawClears).then((result) => {
         if (result.ok) {
           setConfig(sanitizeConfig(result.value as Partial<WeatherConfig> | undefined))
           notify('已保存（原写入被服务端的版本栅栏拒绝，已改用无栅栏写入）', 'ok')
-          return
+          return true
         }
         notify(`该设置未被保存：${result.detail}｜客户端 rev=${scope.getSnapshot().revision ?? '?'}`, 'err')
+        return false
       })
     })
   }, [scope, notify, probe])
 
   const set = useCallback((field: keyof WeatherConfig, value: unknown): void => {
-    commit([[field, value]])
+    void commit([[field, value]])
   }, [commit])
 
   // Saved-city management lives in the shared hook (same code path as the chip),
@@ -287,8 +329,10 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     set('refreshMinutes', refreshInput)
   }
 
-  /** Commit a `<input type="time">` value only when it parses to `HH:MM`. */
-  const commitClockTime = (field: 'briefMorning' | 'briefEvening', text: string): void => {
+  /** Commit a `<select>`-picked clock time only when it parses to `HH:MM`. The
+   * pick is echoed immediately and retracted if the write does not land, so the
+   * control never reads as "my choice was ignored". */
+  const commitClockTime = (field: ClockFieldName, text: string): void => {
     const parsed = parseClockTime(text)
     if (parsed === undefined) {
       notify('时间格式应为 HH:MM', 'err')
@@ -299,9 +343,18 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
       notify('早上与晚间简报时间不能相同', 'err')
       return
     }
-    if (parsed === effective[field]) return
+    if (parsed === effective[field]) {
+      // Already what is stored: no write — and an earlier pick of this field that
+      // is still awaiting its answer must not stay on screen as the current one.
+      dropClockDraft(field)
+      return
+    }
     clearNotice()
-    set(field, parsed)
+    setClockDraft((prev) => ({ ...prev, [field]: parsed }))
+    void commit([[field, parsed]]).then((landed) => {
+      // Refused: the stored value is what the control must show again.
+      if (!landed) dropClockDraft(field, parsed)
+    })
   }
 
   /**
@@ -389,7 +442,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
             <ClockField
               id={`${ids}-brief-morning`}
               label="早上简报时间"
-              value={effective.briefMorning}
+              value={clockDraft.briefMorning ?? effective.briefMorning}
               onCommit={(text) => commitClockTime('briefMorning', text)}
             />
             <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送今日天气</span>
@@ -398,7 +451,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
             <ClockField
               id={`${ids}-brief-evening`}
               label="晚间简报时间"
-              value={effective.briefEvening}
+              value={clockDraft.briefEvening ?? effective.briefEvening}
               onCommit={(text) => commitClockTime('briefEvening', text)}
             />
             <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送明日天气</span>

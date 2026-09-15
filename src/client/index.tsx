@@ -91,18 +91,24 @@ function createWriteProbe(ctx: Context): WriteProbe {
     /**
      * Read the authority's CURRENT revision and send exactly that back.
      *
-     * This is the whole fix. The Host refuses a write whose `expectedRevision`
-     * differs from its own `registration.revision`, and the value the scoped
-     * transport carries is the one it last read — which is exactly what goes
-     * stale when the namespace re-registers (a `dsh web` restart resets the
-     * counter to 0) while the page keeps its number. Re-reading here and echoing
-     * the authority's own revision makes that mismatch impossible.
+     * The Host refuses a write whose `expectedRevision` differs from its own
+     * `registration.revision`, and the value the scoped transport carries is the
+     * one it last read — which is exactly what goes stale when the namespace
+     * re-registers (a `dsh web` restart resets the counter to 0) while the page
+     * keeps its number. Re-reading here and echoing the authority's own revision
+     * makes that mismatch impossible.
      *
-     * Omitting the argument is NOT an alternative: a remote call cannot carry
-     * `undefined` through its payload, so the Host would receive something
-     * non-`undefined` (e.g. `null`) and compare it as a real revision — a
-     * guaranteed conflict. So the third argument is passed only when describe
-     * actually produced a number.
+     * The third parameter is passed UNCONDITIONALLY, and that is load-bearing:
+     * a generated Remote method enforces its declared arity before anything
+     * crosses the wire, so a two-argument call never reaches the Host — it throws
+     * `client api: settings/mutate expected 3 argument(s), got 2` right here, and
+     * this fallback would be dead exactly when it is needed.
+     *
+     * Passing `undefined` is not the same as refusing to write: `expectedRevision`
+     * is declared optional, and the transport drops undefined arguments from the
+     * wire args object, so the Host sees no expected revision at all and applies
+     * the edit unconditionally. That is precisely what this fallback promises,
+     * and it still works when `describe` itself is what is broken.
      */
     let revision: number | undefined
     try {
@@ -116,9 +122,7 @@ function createWriteProbe(ctx: Context): WriteProbe {
 
     let response: Awaited<ReturnType<RemoteSettingsFace['mutate']>>
     try {
-      response = revision === undefined
-        ? await settings.mutate(WEATHER_NS, ops)
-        : await settings.mutate(WEATHER_NS, ops, revision)
+      response = await settings.mutate(WEATHER_NS, ops, revision)
     } catch (error) {
       return { ok: false, detail: `mutate 异常：${message(error)}` }
     }
