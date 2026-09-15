@@ -1020,3 +1020,107 @@ export function evaluateAlerts(
 
   return alerts
 }
+
+/** 某一天内的逐小时点（详情视图用）。缺报的字段一律留空，绝不伪造成 0。 */
+export interface DayHourlyPoint {
+  /** Open-Meteo 本地 ISO，如 `2026-09-05T14:00`。 */
+  time: string
+  /** 温度（°C），缺报时为空。 */
+  temperature?: number
+  /** WMO 天气码，缺报时为空。 */
+  weatherCode?: number
+  /** 降水概率（%），缺报时为空。 */
+  precipProb?: number
+  /** 该小时是否白天（取自接口的 `is_day`；缺报时按白天处理）。 */
+  isDay: boolean
+  /** 该小时风速（km/h），缺报时为空。 */
+  windSpeed?: number
+  /** 该小时相对湿度（%），缺报时为空。 */
+  humidity?: number
+}
+
+/** 某个日期的详情（逐小时 + 当日概况）。 */
+export interface DayDetail {
+  /** ISO 日期（YYYY-MM-DD）。 */
+  date: string
+  /** 该日的逐小时点，按时间升序；超出预报范围时为空数组。 */
+  hourly: DayHourlyPoint[]
+  /** 日出（本地 ISO）。 */
+  sunrise?: string
+  /** 日落（本地 ISO）。 */
+  sunset?: string
+  /** 当日总降水量（mm）。 */
+  precipSum?: number
+  /** 当日最大阵风（km/h）。 */
+  windGustsMax?: number
+}
+
+/**
+ * 拉取指定日期的逐小时天气（Open-Meteo，时区 auto，公制）。
+ *
+ * 逐日详情视图专用：与 {@link fetchWeather} 共用 {@link FORECAST_URL}、超时/
+ * 取消策略与错误风格，但只取一天 —— 逐小时温度 / 天气码 / 降水概率 / 风速 /
+ * 湿度 / 昼夜标记，外加当日概况（日出日落、降水量、最大阵风）。`start_date`
+ * 与 `end_date` 同为该日期，所以 `hourly.time` 就是这一天的 24 个整点。
+ *
+ * 数据一律公制（°C / km/h / mm），刻意不设 `temperature_unit` /
+ * `wind_speed_unit`：显示单位由 units.ts 在渲染时转换，快照因此与单位设置无关。
+ * @param location - 目标地点
+ * @param date - 目标日期（`YYYY-MM-DD`）
+ * @param signal - 可选取消信号：切换城市/关闭详情时中断在途请求
+ */
+export async function fetchDayDetail(location: GeoLocation, date: string, signal?: AbortSignal): Promise<DayDetail> {
+  const params = new URLSearchParams({
+    latitude: String(location.latitude),
+    longitude: String(location.longitude),
+    start_date: date,
+    end_date: date,
+    hourly: 'temperature_2m,weather_code,is_day,precipitation_probability,wind_speed_10m,relative_humidity_2m',
+    daily: 'sunrise,sunset,precipitation_sum,wind_gusts_10m_max',
+    timezone: 'auto',
+    language: 'zh',
+  })
+  const res = await apiFetch(`${FORECAST_URL}?${params.toString()}`, signal === undefined ? {} : { signal })
+  if (!res.ok) throw new Error(`天气数据获取失败（HTTP ${res.status}）`)
+  const json = res.json as {
+    hourly?: {
+      time?: string[]
+      temperature_2m?: (number | null)[]
+      weather_code?: (number | null)[]
+      is_day?: (number | null)[]
+      precipitation_probability?: (number | null)[]
+      wind_speed_10m?: (number | null)[]
+      relative_humidity_2m?: (number | null)[]
+    }
+    daily?: {
+      sunrise?: string[]
+      sunset?: string[]
+      precipitation_sum?: (number | null)[]
+      wind_gusts_10m_max?: (number | null)[]
+    }
+  } | null
+  // A 200 with an empty/non-JSON body is a broken feed, not "no hourly data" —
+  // stay consistent with fetchWeather's explicit error.
+  if (json === null) throw new Error('天气服务暂未返回数据，请稍后重试')
+  const hourly = json.hourly
+  const daily = json.daily
+  const hourIsDay = hourly?.is_day ?? []
+  // 缺报的整点不伪造：time 为空数组时当天就没有逐小时数据（例如超出预报范围），
+  // 单个整点缺值时对应字段留空，由面板显示 “—”，而不是画出 0°C / 0% 的假数据。
+  return {
+    date,
+    hourly: (hourly?.time ?? []).map((time, index) => ({
+      time,
+      temperature: hourly?.temperature_2m?.[index] ?? undefined,
+      weatherCode: hourly?.weather_code?.[index] ?? undefined,
+      precipProb: hourly?.precipitation_probability?.[index] ?? undefined,
+      isDay: (hourIsDay[index] ?? 1) === 1,
+      windSpeed: hourly?.wind_speed_10m?.[index] ?? undefined,
+      humidity: hourly?.relative_humidity_2m?.[index] ?? undefined,
+    })),
+    sunrise: daily?.sunrise?.[0],
+    sunset: daily?.sunset?.[0],
+    precipSum: daily?.precipitation_sum?.[0] ?? undefined,
+    windGustsMax: daily?.wind_gusts_10m_max?.[0] ?? undefined,
+  }
+}

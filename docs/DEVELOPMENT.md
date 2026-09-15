@@ -52,10 +52,11 @@ src/config-shared.ts  # 共享配置类型 + 默认值 + 范围常量 + sanitize
 src/dsh-settings.d.ts # 本地 ctx.settings 类型 shim（见文件内注释）
 src/client/           # 浏览器半侧
   index.tsx           #   apply：注册 conversation.session.header.actions（天气 chip）+ settings.section（配置页）
-  WeatherBar.tsx      #   chip + 详情弹层主组件（数据生命周期 / 交互）
-  panels.tsx          #   弹层纯展示块（stat/rain/hourly/daily/facts）
-  WeatherSettings.tsx #   设置页表单（本地草稿 + blur 提交校验）
-  weather-api.ts      #   数据层：公制抓取、超时/取消、IP 共识定位、中文地理编码、告警评估
+  WeatherBar.tsx      #   chip + 详情弹层的布局与交互（数据/副作用全部走 hooks）
+  hooks.ts            #   行为层：定位 + IP 漂移、数据抓取 + 降级、收藏城市、每日简报、通知、标签页标题、逐日详情
+  panels.tsx          #   弹层纯展示块（stat/rain/hourly/daily/facts/day-detail）
+  WeatherSettings.tsx #   设置页表单（本地草稿 + blur 提交校验、收藏城市管理、简报时间）
+  weather-api.ts      #   数据层：公制抓取、超时/取消、IP 共识定位、中文地理编码、告警评估、逐日详情
   condition.ts        #   WMO 分类/阈值单一源 + 中文文案 + 时间格式化
   units.ts            #   显示单位换算（°F/mph），数据层保持公制
   theme.ts            #   设计 token / 调色板单一源
@@ -63,8 +64,17 @@ src/client/           # 浏览器半侧
   icons.tsx           #   WMO → SVG 图标 + 通用小图标
   TrendChart.tsx      #   24h 温度 SVG 折线
 scripts/build.mjs     # esbuild 构建脚本（委托 build-lib.mjs）
-scripts/check-lib-sync.mjs  # 校验 lib/ 与 src/ 同步
+scripts/check-lib-sync.mjs  # 校验 lib/ 与 src/ 同步（已接入 npm run check）
 ```
+
+## 校验
+
+```sh
+npm run check        # typecheck → build → verify（bundle/feature 断言）→ check:lib-sync
+```
+
+`lib/` 是提交产物（git 安装无需执行构建脚本），因此**每次改 `src/` 都要重建并提交 `lib/`**；
+`check:lib-sync` 会重新构建到临时目录并逐字节比对，漏提交会直接失败。
 
 ## 发布与收录
 

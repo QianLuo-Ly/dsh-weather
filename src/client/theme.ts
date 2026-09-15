@@ -41,6 +41,13 @@ export const BANNER = {
   warning: { color: TOKEN.warn, bg: 'rgba(180, 83, 9, 0.1)', border: 'rgba(180, 83, 9, 0.28)' },
 } as const
 
+/** Shared elevation shadows — components must not re-spell these literals. */
+export const SHADOW = {
+  popover: '0 16px 48px rgba(0, 0, 0, 0.28)',
+  floating: '0 8px 24px rgba(0, 0, 0, 0.18)',
+  dropdown: '0 8px 24px rgba(0, 0, 0, 0.12)',
+} as const
+
 export const NUM = { fontVariantNumeric: 'tabular-nums' as const }
 
 export const baseButton: CSSProperties = {

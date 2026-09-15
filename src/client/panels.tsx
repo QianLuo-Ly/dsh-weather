@@ -6,12 +6,13 @@
  * All of them read the shared {@link TOKEN} / {@link NUM} presets and the
  * condition/icon helpers; none of them touches settings, fetching or state.
  */
-import type { ReactElement } from 'react'
-import type { DailyPoint, HourlyPoint, MinutelyPoint } from './weather-api'
+import type { CSSProperties, ReactElement } from 'react'
+import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from './weather-api'
 import { RAIN_MM_PER_15MIN } from './weather-api'
 import { dayLabel, hourLabel, timeLabel } from './condition'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
-import { NUM, PALETTE, TOKEN } from './theme'
+import { actionButton, NUM, PALETTE, TOKEN } from './theme'
+import { tempText, windText, type UnitSetting } from './units'
 
 /** Rain-bar intensity ramp (mm per 15 min → color), shared with theme palette. */
 const RAIN_RAMP: Array<{ atLeast: number; color: string }> = [
@@ -31,8 +32,8 @@ export function TodayFacts(props: { items: TodayFactItem[] }): ReactElement {
   const { items } = props
   return (
     <div data-block="today" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 12, fontSize: 12, color: TOKEN.fgMuted }}>
-      {items.map((item, index) => (
-        <span key={`${index}-${item.text}`} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      {items.map((item) => (
+        <span key={item.text} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
           {item.glyph !== undefined && <Glyph name={item.glyph} size={14} />}
           {item.text}
         </span>
@@ -53,7 +54,6 @@ export function StatChip(props: {
   return (
     <div
       style={{
-        flex: '1 1 0',
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',
@@ -147,13 +147,20 @@ export function HourlyStrip(props: {
   )
 }
 
-/** 7-day forecast rows with temperature-range gradient bars. */
+/**
+ * 7-day forecast rows with temperature-range gradient bars.
+ *
+ * `onSelectDay` makes every row openable (the row becomes a real button);
+ * without it the rows stay inert and render exactly as before.
+ */
 export function DailyList(props: {
   title: string
   points: DailyPoint[]
   fmt: (value: number) => string
+  /** 点击某一行时回传该行的日期（`YYYY-MM-DD`）；不传则行不可点。 */
+  onSelectDay?: (date: string) => void
 }): ReactElement {
-  const { title, points, fmt } = props
+  const { title, points, fmt, onSelectDay } = props
   const weekMin = points.length > 0 ? Math.min(...points.map((d) => d.tempMin)) : 0
   const weekMax = points.length > 0 ? Math.max(...points.map((d) => d.tempMax)) : 1
   const weekSpan = weekMax - weekMin || 1
@@ -164,8 +171,18 @@ export function DailyList(props: {
         {points.map((point, index) => {
           const left = ((point.tempMin - weekMin) / weekSpan) * 100
           const width = Math.max(8, ((point.tempMax - point.tempMin) / weekSpan) * 100)
-          return (
-            <div key={point.date} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '3px 2px', borderBottom: index === points.length - 1 ? 'none' : `1px solid ${TOKEN.border}`, fontSize: 12.5 }}>
+          // Shared row metrics, so the clickable (button) and inert (div) rows
+          // stay pixel-identical — a button only adds the UA resets below.
+          const row: CSSProperties = {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '3px 2px',
+            borderBottom: index === points.length - 1 ? 'none' : `1px solid ${TOKEN.border}`,
+            fontSize: 12.5,
+          }
+          const cells = (
+            <>
               <span style={{ width: 44, flex: '0 0 auto', ...NUM }}>{dayLabel(point.date, index)}</span>
               <span style={{ width: 20, textAlign: 'center', flex: '0 0 auto' }}>
                 <WeatherIcon code={point.weatherCode} isDay={true} size={18} />
@@ -188,9 +205,122 @@ export function DailyList(props: {
                 />
               </span>
               <span style={{ width: 38, flex: '0 0 auto', textAlign: 'right', fontWeight: 600, ...NUM }}>{fmt(point.tempMax)}</span>
-            </div>
+            </>
+          )
+          if (onSelectDay === undefined) {
+            return <div key={point.date} style={row}>{cells}</div>
+          }
+          return (
+            <button
+              key={point.date}
+              type="button"
+              onClick={() => onSelectDay(point.date)}
+              aria-label={`查看 ${dayLabel(point.date, index)} 天气详情`}
+              style={{
+                ...row,
+                width: '100%',
+                margin: 0,
+                border: 'none',
+                borderBottom: row.borderBottom,
+                borderRadius: 6,
+                background: 'transparent',
+                color: 'inherit',
+                fontFamily: 'inherit',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
+              {cells}
+            </button>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+/** `2026-09-05` → `9月5日 周五`（按本地零点解析，避免 UTC 偏移串到前一天）。 */
+function detailDateLabel(date: string): string {
+  const parsed = new Date(`${date}T00:00:00`)
+  if (Number.isNaN(parsed.getTime())) return date
+  const weekdays = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+  return `${parsed.getMonth() + 1}月${parsed.getDate()}日 ${weekdays[parsed.getDay()]}`
+}
+
+/** 某一天的详情面板：顶部返回按钮 + 当日概况 + 逐小时列表。缺报字段显示 —。 */
+export function DayDetailPanel(props: {
+  detail: DayDetail
+  units: UnitSetting
+  onBack: () => void
+}): ReactElement {
+  const { detail, units, onBack } = props
+  const hasSun = detail.sunrise !== undefined || detail.sunset !== undefined
+  const hasSummary = detail.precipSum !== undefined || detail.windGustsMax !== undefined
+  return (
+    <div data-block="day-detail" style={{ marginTop: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          onClick={onBack}
+          autoFocus
+          style={{ ...actionButton, display: 'flex', alignItems: 'center', gap: 4, padding: '4px 11px 4px 8px', flex: '0 0 auto' }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 13, lineHeight: '13px' }}>←</span>
+          <span>返回</span>
+        </button>
+        <span style={{ fontSize: 13, fontWeight: 600, ...NUM }}>{detailDateLabel(detail.date)}</span>
+        {hasSun && (
+          <span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: TOKEN.fgMuted }}>
+            {detail.sunrise !== undefined && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Glyph name="sunrise" size={13} />
+                {timeLabel(detail.sunrise)}
+              </span>
+            )}
+            {detail.sunset !== undefined && (
+              <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <Glyph name="sunset" size={13} />
+                {timeLabel(detail.sunset)}
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+      {hasSummary && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12, color: TOKEN.fgMuted }}>
+          {detail.precipSum !== undefined && <span style={{ ...NUM }}>降水量 {detail.precipSum.toFixed(1)} mm</span>}
+          {detail.windGustsMax !== undefined && <span style={{ ...NUM }}>最大阵风 {windText(detail.windGustsMax, units)}</span>}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 4, marginTop: 8 }}>
+        {detail.hourly.length === 0 && (
+          <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>暂无逐小时数据</span>
+        )}
+        {detail.hourly.map((point) => (
+          <div
+            key={point.time}
+            style={{ flex: '0 0 auto', width: 50, textAlign: 'center', background: TOKEN.bgSoft, borderRadius: 10, padding: '5px 2px' }}
+          >
+            <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
+            <div style={{ margin: '2px 0', minHeight: 18 }}>
+              {point.weatherCode !== undefined
+                ? <WeatherIcon code={point.weatherCode} isDay={point.isDay} size={18} />
+                : <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>—</span>}
+            </div>
+            <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>
+              {point.temperature !== undefined ? tempText(point.temperature, units) : '—'}
+            </div>
+            <div style={{ fontSize: 10, color: point.precipProb !== undefined && point.precipProb > 0 ? TOKEN.accent : TOKEN.fgMuted, ...NUM }}>
+              {point.precipProb !== undefined ? `${point.precipProb}%` : '—'}
+            </div>
+            <div style={{ fontSize: 9.5, lineHeight: '12px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', ...NUM }}>
+              {point.windSpeed !== undefined ? windText(point.windSpeed, units) : '—'}
+            </div>
+            <div style={{ fontSize: 9.5, lineHeight: '12px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', ...NUM }}>
+              {point.humidity !== undefined ? `${Math.round(point.humidity)}%` : '—'}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )

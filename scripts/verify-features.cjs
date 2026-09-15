@@ -11,3 +11,8 @@ console.log('metric feed param (forecast_days):', c.includes('forecast_days'))
 console.log('air-quality feed (air-quality-api):', c.includes('air-quality-api'))
 console.log('IP consensus providers (ipwho.is):', c.includes('ipwho.is'))
 console.log('reverse geocoder (bigdatacloud):', c.includes('bigdatacloud'))
+// New in 0.5.0: saved cities, daily brief, per-day detail.
+console.log('saved locations field:', c.includes('savedLocations') && c.includes('activeSavedId'))
+console.log('daily brief fields:', c.includes('briefMorning') && c.includes('briefEvening'))
+console.log('brief dedupe key prefix:', c.includes('dsh-weather-brief-'))
+console.log('day-detail request range:', c.includes('start_date') && c.includes('end_date'))

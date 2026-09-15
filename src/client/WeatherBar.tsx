@@ -4,35 +4,24 @@
  * sits in the conversation column's own chrome row and can never collide with
  * other plugins' floating controls (sidebars, whales, status pills…).
  *
- * Collapsed it is one compact chip — weather icon, temperature, and a live
- * date/time (minute-aligned clock) — that is always visible while a session
- * is open, expanded or not. Clicking it opens a popover (anchored to the chip)
- * holding the location header, current-weather hero, stat chips, the 24h
- * temperature trend, the hourly strip, the 7-day forecast, and the unit /
- * refresh controls.
+ * Collapsed it is one compact chip — weather icon, temperature, condition and a
+ * live date/time (minute-aligned clock) — always visible while a session is
+ * open. Clicking it opens a popover (anchored to the chip) holding the location
+ * header, the saved-city switcher, current-weather hero, stat chips, the 24h
+ * temperature trend, the hourly strip, the 7-day forecast, per-day detail, and
+ * the unit / refresh controls.
  *
- * Data lifecycle notes:
- * - The feed is metric-only (°C/km/h) — see weather-api.ts. Display units are
- *   applied here via units.ts, so a unit toggle never re-fetches and a cached
- *   snapshot stays valid across unit switches.
- * - Refreshes with data already on screen are silent: the chip/popover never
- *   flicker into "加载中…"; a failed refresh degrades to the last good snapshot
- *   of the SAME location, flagged stale, instead of a blank/error bar.
- * - The clock renders in its own tiny {@link LiveClock} child so the minute
- *   tick re-renders only the time span, not the whole chart/forecast tree.
+ * All data & side-effect logic lives in hooks.ts (location + IP-drift, feed +
+ * stale degrade, saved cities, daily brief, notifications, tab title, day
+ * detail); this file is layout, interaction and derived display text.
+ *
+ * Display units are applied here via units.ts — the feed is metric, so a unit
+ * toggle never re-fetches and a cached snapshot stays valid across switches.
  */
-import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import { DEFAULT_WEATHER_CONFIG, sanitizeConfig, type WeatherConfig } from '../config-shared'
-import {
-  cityLevelName,
-  evaluateAlerts,
-  fetchWeather,
-  resolveAutoLocation,
-  resolveFreshIfDrifted,
-  type GeoLocation,
-  type WeatherData,
-} from './weather-api'
+import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../config-shared'
+import { evaluateAlerts } from './weather-api'
 import {
   aqiInfo,
   clockDate,
@@ -40,17 +29,27 @@ import {
   describeCondition,
   hhmm,
   hourLabel,
-  rainOnsetRounded,
   rainTimingText,
   timeLabel,
   uvLevel,
   weatherAdvice,
   windDirectionText,
 } from './condition'
+import {
+  placeNameOf,
+  useAutoLocation,
+  useConfigWriter,
+  useDailyBrief,
+  useDayDetail,
+  useSavedLocations,
+  useTabTitle,
+  useWeatherFeed,
+  useWeatherNotifications,
+} from './hooks'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
-import { DailyList, HourlyStrip, RainStrip, StatChip, TodayFacts, type TodayFactItem } from './panels'
+import { DailyList, DayDetailPanel, HourlyStrip, RainStrip, StatChip, TodayFacts, type TodayFactItem } from './panels'
 import { TrendChart } from './TrendChart'
-import { NUM, TOKEN, actionButton, baseButton, BANNER, iconButton, segmentButton } from './theme'
+import { NUM, TOKEN, actionButton, baseButton, BANNER, iconButton, segmentButton, SHADOW } from './theme'
 import { tempText, unitLabel, windNumber, windText, windUnitLabel } from './units'
 
 export interface WeatherBarProps {
@@ -59,91 +58,9 @@ export interface WeatherBarProps {
 
 type Status = 'locating' | 'loading' | 'ready' | 'error'
 
-/** How long to wait (ms) before re-checking IP drift after a location persist —
- * persisting the freshly resolved auto-location re-runs the location effect,
- * and that cascade must not fire another network probe. */
-const DRIFT_PROBE_MIN_GAP_MS = 60_000
 const POPOVER_MAX_WIDTH = 560
 const POPOVER_MIN_WIDTH = 280
 const POPOVER_EDGE_GAP = 16
-
-/**
- * Matches the weather prefix this plugin writes into the tab title:
- * `<condition emoji> <temp> <name> — `, plus the legacy fixed-⛅ form used by
- * older bundles. Used only to strip our own prefix when capturing the app's
- * base title.
- */
-const TITLE_PREFIX_RE = /^(☀️|🌤️|⛅|☁️|🌫️|🌦️|🌧️|❄️|🌨️|⛈️|🌙|🌡️) \d+°[CF] .+? — /
-
-/**
- * Manual-mode display name, reduced to city level when possible
- * (`广东省广州市番禺区` → `广东省广州市`). Falls back to 当前位置.
- */
-function manualDisplayName(cityName: string | undefined): string {
-  const raw = cityName?.trim()
-  const reduced = raw !== undefined && raw !== '' ? cityLevelName(raw) : ''
-  return reduced !== '' ? reduced : '当前位置'
-}
-
-const chipButton: CSSProperties = {
-  ...baseButton,
-  display: 'flex',
-  alignItems: 'baseline',
-  gap: 6,
-  background: TOKEN.bgSoft,
-  color: TOKEN.fg,
-  border: `1px solid ${TOKEN.border}`,
-  borderRadius: 999,
-  padding: '3px 10px 3px 5px',
-  cursor: 'pointer',
-  maxWidth: 'min(280px, 42vw)',
-  textAlign: 'left',
-}
-
-const chipIconWrap: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 24,
-  height: 24,
-  borderRadius: '50%',
-  background: TOKEN.bg,
-  border: `1px solid ${TOKEN.border}`,
-  color: TOKEN.fg,
-  alignSelf: 'center',
-}
-
-const chipTemp: CSSProperties = { fontSize: 17, fontWeight: 700, lineHeight: '22px', ...NUM, flex: '0 0 auto' }
-
-const chipCondition: CSSProperties = { fontSize: 14, lineHeight: '20px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', flex: '0 0 auto' }
-
-const clockSpan: CSSProperties = {
-  flex: '0 0 auto',
-  fontSize: 14,
-  lineHeight: '20px',
-  color: TOKEN.fgMuted,
-  whiteSpace: 'nowrap',
-  paddingLeft: 8,
-  borderLeft: `1px solid ${TOKEN.border}`,
-  ...NUM,
-}
-
-const popoverStyle: CSSProperties = {
-  position: 'absolute',
-  top: 'calc(100% + 8px)',
-  zIndex: 60,
-  maxWidth: 'calc(100vw - 24px)',
-  maxHeight: 'calc(100vh - 150px)',
-  overflowY: 'auto',
-  background: TOKEN.bg,
-  color: TOKEN.fg,
-  border: `1px solid ${TOKEN.border}`,
-  borderRadius: 16,
-  boxShadow: '0 16px 48px rgba(0, 0, 0, 0.28)',
-  padding: 14,
-  fontSize: 13.5,
-  textAlign: 'left',
-}
 
 /**
  * Live local clock driving the chip's date/time text. Self-contained so its
@@ -171,13 +88,7 @@ function LiveClock(): ReactElement {
 export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const { scope } = props
   const [config, setConfig] = useState<WeatherConfig | undefined>(() => sanitizeConfig(scope.getSnapshot().value))
-  const [status, setStatus] = useState<Status>('loading')
-  const [location, setLocation] = useState<GeoLocation | null>(null)
-  const [data, setData] = useState<WeatherData | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState(false)
-  const [tick, setTick] = useState(0)
-  const [relocateTick, setRelocateTick] = useState(0)
   // Popover geometry measured when the chip opens: which side to grow from and
   // how wide it may be before touching the viewport edge.
   const [pop, setPop] = useState<{ align: 'start' | 'end'; width: number } | null>(null)
@@ -185,91 +96,49 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const chipRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
-  // Set by the relocate/retry buttons so the NEXT locate pass bypasses the
-  // cached auto location exactly once; cleared after that pass consumes it.
-  const bypassCacheRef = useRef(false)
-  // Last IP-drift probe time (ms): gates drift re-checks so that persisting a
-  // freshly resolved location (which re-runs the location effect) does not
-  // cascade into repeated probes.
-  const lastDriftProbeRef = useRef(0)
-  // alert key -> last notification timestamp (per-session dedupe window).
-  const notifiedAt = useRef(new Map<string, number>())
-  // Last successful payload (keyed by location only — the payload is metric,
-  // so a unit switch never invalidates it).
-  const lastGoodRef = useRef<{ weather: WeatherData; key: string } | null>(null)
-  const [stale, setStale] = useState(false)
-  const [updatedAt, setUpdatedAt] = useState<number | null>(null)
-  // The app's own tab title, captured once so the weather prefix can be stripped.
-  const appTitle = useRef<string | null>(null)
 
-  // IP-drift notice: transient toast under the chip when the network moved and
-  // the location auto-switched. Cleared by a timer; also sends a browser
-  // notification when the user has granted permission AND enabled alerts.
-  const [driftNotice, setDriftNotice] = useState<string | null>(null)
-  const driftTimerRef = useRef<number | null>(null)
-  const showDrift = useCallback((newName: string, notify: boolean): void => {
-    setDriftNotice(newName)
-    if (driftTimerRef.current !== null) window.clearTimeout(driftTimerRef.current)
-    driftTimerRef.current = window.setTimeout(() => setDriftNotice(null), 6000)
-    if (notify && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      try {
-        new Notification('📍 天气位置已自动切换', {
-          body: `检测到网络变化，已切换到 ${newName}`,
-          tag: 'dsh-weather-drift',
-        })
-      } catch {
-        // notification construction can throw in restricted contexts — ignore
-      }
-    }
-  }, [])
-
-  // Persist a resolved auto location into settings — keeps it stable across
-  // refreshes and lets the location effect converge on the new coordinates.
-  const persistLocation = useCallback((loc: GeoLocation): void => {
-    void scope.set('autoLatitude', loc.latitude)
-    void scope.set('autoLongitude', loc.longitude)
-    void scope.set('autoCityName', loc.name)
-    void scope.set('autoSource', loc.source)
-  }, [scope])
-
-  // Clear a pending drift-toast timer on unmount.
-  useEffect(() => () => {
-    if (driftTimerRef.current !== null) window.clearTimeout(driftTimerRef.current)
-  }, [])
-
-  // Resolve the effective config — normalized so a hand-edited or older
-  // settings document can never yield undefined/NaN fields (see sanitizeConfig).
-  const effective = config ?? DEFAULT_WEATHER_CONFIG
-
-  // Latest alert preference, mirrored for the async location/drift paths so
-  // they need not depend on `alertsEnabled` (toggling it must not re-run the
-  // whole locate+fetch chain just to refresh the notify flag).
-  const alertsEnabledRef = useRef(effective.alertsEnabled)
-  alertsEnabledRef.current = effective.alertsEnabled
-
-  // Single source for the displayed place name. Config wins (manual 显示名称 /
-  // auto 缓存名) because it updates instantly and is authoritative; the
-  // resolved location is only a fallback until a name is persisted. Used by
-  // the chip, the popover, the tab title and notification bodies so they can
-  // never disagree.
-  const placeName = (): string => {
-    if (effective.locationMode === 'manual') return manualDisplayName(effective.cityName)
-    const cachedName = effective.autoCityName
-    if (cachedName !== undefined && cachedName !== '') return cachedName
-    return location?.name ?? '定位中…'
-  }
-
-  // Keep the config snapshot in sync with settings changes.
+  // Keep the config snapshot in sync with settings changes — normalized so a
+  // hand-edited or older settings document can never yield undefined/NaN
+  // fields. Snapshots are rebuilt objects, so an unchanged section keeps the
+  // previous reference (otherwise every unrelated snapshot re-renders us).
   useEffect(() => {
-    const sync = (): void => setConfig(sanitizeConfig(scope.getSnapshot().value))
+    const sync = (): void => {
+      const next = sanitizeConfig(scope.getSnapshot().value)
+      setConfig((prev) => (sameConfig(prev, next) ? prev : next))
+    }
     sync()
     return scope.subscribe(sync)
   }, [scope])
 
-  // Restore the original tab title when the plugin unmounts.
-  useEffect(() => () => {
-    if (appTitle.current !== null) document.title = appTitle.current
-  }, [])
+  const effective = config ?? DEFAULT_WEATHER_CONFIG
+
+  // Data & side effects.
+  const { location, locating, error: locationError, relocate, driftNotice } = useAutoLocation({ scope, effective })
+  const feed = useWeatherFeed({ effective, location })
+  const saved = useSavedLocations({ scope, effective })
+  const day = useDayDetail(location)
+  const writer = useConfigWriter(scope)
+  const data = feed.data
+  const name = placeNameOf(effective, location)
+  // The saved entry matching the displayed coordinates (null when the current
+  // location is custom/auto) — drives the ☆ toggle and the chip highlight.
+  const savedMatch = location === null
+    ? undefined
+    : saved.saved.find((entry) => placeKey(entry.latitude, entry.longitude) === placeKey(location.latitude, location.longitude))
+  const status: Status = locating
+    ? (effective.locationMode === 'manual' ? 'loading' : 'locating')
+    : location === null
+      ? 'error'
+      : feed.status
+  const error = locationError ?? feed.error
+
+  useWeatherNotifications({ effective, data, placeName: name, stale: feed.stale })
+  useDailyBrief({ effective, data, placeName: name, stale: feed.stale })
+  useTabTitle({ effective, data, status, placeName: name })
+
+  // The transient toast under the chip: IP-drift switches and saved-city
+  // feedback share one slot.
+  const toast = driftNotice ?? saved.notice
 
   const measurePopover = useCallback((): void => {
     if (barRef.current === null) return
@@ -332,298 +201,37 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     if (open && popoverRef.current !== null) popoverRef.current.focus()
   }, [open])
 
-  // Resolve the location — runs once on mount and whenever the location
-  // settings change or the user explicitly re-locates. Auto refresh NEVER
-  // re-locates, and the resolved auto location is cached in settings so the
-  // display stays stable until "重新定位" is pressed.
+  // Jump to the top when a day-detail view takes over the popover body.
   useEffect(() => {
-    if (!effective.enabled) return
-    // Early out for non-location churn: display metadata writes (manual
-    // city-name edits, auto name/source persisted alongside unchanged
-    // coordinates) re-run this effect through the config subscription but must
-    // not re-resolve, re-set the location object (which would re-fetch) or
-    // flash a busy state. Coordinates + mode are the only real inputs.
-    const samePlace = !bypassCacheRef.current
-      && location !== null
-      && (effective.locationMode === 'manual'
-        ? location.source === 'manual' && location.latitude === effective.latitude && location.longitude === effective.longitude
-        : location.latitude === effective.autoLatitude && location.longitude === effective.autoLongitude)
-    if (samePlace) return
-    let cancelled = false
-    setStatus(effective.locationMode === 'manual' ? 'loading' : 'locating')
-    setError(null)
-    void (async () => {
-      try {
-        let loc: GeoLocation
-        if (effective.locationMode === 'manual') {
-          if (effective.latitude === undefined || effective.longitude === undefined) {
-            throw new Error('手动模式缺少坐标，请在 设置 → 天气 中填写')
-          }
-          loc = {
-            name: manualDisplayName(effective.cityName),
-            latitude: effective.latitude,
-            longitude: effective.longitude,
-            source: 'manual',
-          }
-        } else {
-          // Reuse the cached auto location unless the user explicitly re-locates
-          // (bypassCacheRef is set by the 重新定位 / 重试 buttons and consumed here).
-          const cached = !bypassCacheRef.current
-            && effective.autoLatitude !== undefined
-            && effective.autoLongitude !== undefined
-            ? {
-                // Preserve the resolved name verbatim — it may already include a
-                // district (区) resolved from a trusted browser fix.
-                name: effective.autoCityName !== undefined && effective.autoCityName !== ''
-                  ? effective.autoCityName
-                  : '当前位置',
-                latitude: effective.autoLatitude,
-                longitude: effective.autoLongitude,
-                source: effective.autoSource ?? 'ip',
-              }
-            : null
-          loc = cached ?? await resolveAutoLocation()
-          bypassCacheRef.current = false
-          if (cancelled) return
-          if (cached === null) {
-            // Persist the resolved location so it stops hopping across
-            // refreshes. Arming the drift gate here means the persist→effect
-            // cascade (four auto* writes) cannot re-probe the fresh location.
-            lastDriftProbeRef.current = Date.now()
-            persistLocation(loc)
-          } else {
-            // IP-drift check: a cached IP-derived location that disagrees with
-            // a fresh IP consensus (> AUTO_LOCATION_DRIFT_KM) means the network
-            // has moved (VPN / roaming / ISP re-route). GPS-derived caches are
-            // trusted (validated by accuracy at resolve time; this network's IP
-            // rotates and would mislabel them). Gated so the persist→effect
-            // cascade cannot fire repeated probes.
-            if ((effective.autoSource ?? 'ip') !== 'gps'
-              && Date.now() - lastDriftProbeRef.current >= DRIFT_PROBE_MIN_GAP_MS) {
-              lastDriftProbeRef.current = Date.now()
-              const fresh = await resolveFreshIfDrifted(cached)
-              if (cancelled) return
-              if (fresh !== null) {
-                loc = fresh
-                persistLocation(fresh)
-                showDrift(fresh.name, alertsEnabledRef.current)
-              }
-            }
-          }
-        }
-        if (cancelled) return
-        setLocation(loc)
-        setStatus('loading')
-      } catch (err) {
-        bypassCacheRef.current = false
-        if (cancelled) return
-        setStatus('error')
-        setError(err instanceof Error ? err.message : String(err))
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [
-    // Location-affecting inputs only. `cityName`/`autoCityName`/`autoSource`
-    // are display metadata written by this effect itself — re-running the
-    // whole locate chain when they change would cause silent refetch churn
-    // (e.g. every keystroke of the manual display-name field).
-    effective.enabled,
-    effective.locationMode,
-    effective.latitude,
-    effective.longitude,
-    effective.autoLatitude,
-    effective.autoLongitude,
-    relocateTick,
-    persistLocation,
-    showDrift,
-  ])
+    if (day.date !== null && popoverRef.current !== null) popoverRef.current.scrollTop = 0
+  }, [day.date])
 
-  // Fetch weather for the resolved location — re-runs on refresh ticks only.
-  // Aborts the previous request on re-run/unmount (no stale-response races).
-  // Refreshes with data already on screen are SILENT: status stays `ready` and
-  // only `stale`/`error` are updated on failure.
+  // Closing the popover also closes the day-detail view (the state lives here
+  // while the panel is a child that unmounts) and cancels its in-flight
+  // request, so reopening never lands on a stale sub-view.
   useEffect(() => {
-    if (!effective.enabled || location === null) return
-    const controller = new AbortController()
-    let cancelled = false
-    const locKey = `${location.latitude.toFixed(5)},${location.longitude.toFixed(5)}`
-    const shown = lastGoodRef.current
-    if (shown === null || shown.key !== locKey) {
-      // Nothing shown for this location yet (or we switched cities) — the
-      // popover/chip must not keep displaying a previous city's snapshot.
-      setStatus('loading')
-      setData(null)
-      setStale(false)
-      setError(null)
-    }
-    void (async () => {
-      try {
-        const weather = await fetchWeather(location, controller.signal)
-        if (cancelled) return
-        lastGoodRef.current = { weather, key: locKey }
-        setData(weather)
-        setUpdatedAt(Date.now())
-        setError(null)
-        setStale(false)
-        setStatus('ready')
-      } catch (err) {
-        if (cancelled) return
-        const message = err instanceof Error ? err.message : String(err)
-        // Degrade to the cached snapshot only when it belongs to the SAME
-        // location — a snapshot from another city would mislead more than an
-        // error.
-        const cache = lastGoodRef.current
-        if (cache !== null && cache.key === locKey) {
-          setData(cache.weather)
-          setError(message)
-          setStale(true)
-          setStatus('ready')
-        } else {
-          setData(null)
-          setError(message)
-          setStale(false)
-          setStatus('error')
-        }
-      }
-    })()
-    return () => {
-      cancelled = true
-      controller.abort()
-    }
-  }, [effective.enabled, location, tick])
-
-  // Auto-refresh on the configured interval (sanitized, so it is always ≥ 5).
-  useEffect(() => {
-    if (!effective.enabled) return
-    const id = window.setInterval(() => setTick((n) => n + 1), Math.max(5, effective.refreshMinutes) * 60_000)
-    return () => window.clearInterval(id)
-  }, [effective.refreshMinutes, effective.enabled])
-
-  // Periodic IP-drift probe (auto mode with an IP-derived cache only): if the
-  // network moves while the page stays open (VPN, roaming, ISP re-route), adopt
-  // the new location so the forecast follows without a manual re-locate.
-  useEffect(() => {
-    if (!effective.enabled || effective.locationMode !== 'auto') return
-    if (effective.autoLatitude === undefined || effective.autoLongitude === undefined) return
-    if ((effective.autoSource ?? 'ip') === 'gps') return
-    let cancelled = false
-    const cached = {
-      latitude: effective.autoLatitude,
-      longitude: effective.autoLongitude,
-      source: 'ip' as const,
-    }
-    const probe = (): void => {
-      // Arm the shared gate so an adoption here (which persists + re-runs the
-      // location effect) cannot trigger an immediate second probe there.
-      lastDriftProbeRef.current = Date.now()
-      void resolveFreshIfDrifted(cached).then((fresh) => {
-        if (cancelled || fresh === null) return
-        // Persisting updates the cached auto location; the location effect
-        // (depends on the auto* fields) re-runs, adopts it and refetches.
-        persistLocation(fresh)
-        showDrift(fresh.name, alertsEnabledRef.current)
-      })
-    }
-    const id = window.setInterval(probe, 60 * 60_000)
-    return () => {
-      cancelled = true
-      window.clearInterval(id)
-    }
-  }, [
-    effective.enabled,
-    effective.locationMode,
-    effective.autoLatitude,
-    effective.autoLongitude,
-    effective.autoSource,
-    persistLocation,
-    showDrift,
-  ])
-
-  // Ask for notification permission once when alerts are enabled.
-  useEffect(() => {
-    if (effective.alertsEnabled && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-      void Notification.requestPermission()
-    }
-  }, [effective.alertsEnabled])
-
-  // Fire a browser notification when a severe-weather alert appears, at most
-  // once per alert combination per hour (4 h for lead-time `*-soon` alerts, so
-  // an approaching storm does not nag on every auto-refresh). The dedupe write
-  // happens only after the permission gate, so alerts seen while permission is
-  // missing are still delivered once the user grants it.
-  useEffect(() => {
-    if (!effective.alertsEnabled || data === null) return
-    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-    const fmtLocal = (value: number): string => tempText(value, effective.units)
-    const windFmtLocal = (kmh: number): string => windText(kmh, effective.units)
-    const alerts = evaluateAlerts(data, fmtLocal, windFmtLocal)
-    // Rain-soon notification: expected to start within the hour and not
-    // already falling. Display-side only otherwise — never a banner/alert badge.
-    const rain = data.rainSoon
-    if (rain !== undefined && !rain.rainingNow && rain.onsetMinutes !== undefined && rain.onsetMinutes <= 60) {
-      alerts.push({
-        key: 'rain-soon',
-        level: 'warning',
-        title: '即将降雨',
-        detail: `预计 ${rainOnsetRounded(rain.onsetMinutes)} 分钟后开始下雨，出门记得带伞`,
-      })
-    }
-    if (alerts.length === 0) return
-    const key = alerts.map((alert) => alert.key).sort().join('+')
-    const now = Date.now()
-    const dedupeMs = key.includes('-soon') ? 4 * 60 * 60_000 : 60 * 60_000
-    const last = notifiedAt.current.get(key)
-    if (last !== undefined && now - last < dedupeMs) return
-    // Bound the dedupe map (worst case: one entry per alert combo per hour).
-    if (notifiedAt.current.size > 24) notifiedAt.current.clear()
-    notifiedAt.current.set(key, now)
-    try {
-      new Notification(`⚠ ${placeName()} 天气提醒`, {
-        body: alerts.map((alert) => `${alert.title}：${alert.detail}`).join('；'),
-        tag: `dsh-weather-${key}`,
-      })
-    } catch {
-      // notification construction can throw in restricted contexts — ignore
-    }
-  }, [data, effective.alertsEnabled, effective.units, effective.locationMode, effective.cityName, effective.autoCityName, location])
-
-  // Show the current weather in the browser tab title
-  // (`☀️ 26° 广州 — 应用标题`). The app base title is captured once and the
-  // prefix is fully owned by this plugin: it restores the base while disabled,
-  // on unmount, and when the plugin is in a terminal error with no data — so a
-  // failed city switch never leaves the previous city's weather in the tab.
-  useEffect(() => {
-    if (!effective.enabled) {
-      if (appTitle.current !== null && appTitle.current !== document.title) {
-        document.title = appTitle.current
-      }
-      return
-    }
-    if (data === null) {
-      if (appTitle.current !== null && status === 'error') {
-        document.title = appTitle.current
-      }
-      return
-    }
-    if (appTitle.current === null) {
-      // Strip our own prefix if a previous page life left one behind (the
-      // current `<emoji> <temp> <name> — ` form, or the legacy fixed-⛅ form).
-      const match = document.title.match(TITLE_PREFIX_RE)
-      appTitle.current = match !== null ? document.title.slice(match[0].length) : document.title
-    }
-    const condition = describeCondition(data.current.weatherCode, data.current.isDay)
-    const title = `${condition.emoji} ${tempText(data.current.temperature, effective.units)} ${placeName()} — ${appTitle.current}`
-    if (document.title !== title) document.title = title
-  }, [data, effective.enabled, effective.units, effective.locationMode, effective.cityName, effective.autoCityName, location, status])
-
-  if (!effective.enabled) return null
+    if (!open) day.close()
+  }, [open, day.close])
 
   const units = effective.units
   const fmt = (value: number): string => tempText(value, units)
+  // Comparatively heavy derived text: keep it stable across the minute tick and
+  // unrelated state changes instead of recomputing on every render.
+  const alerts = useMemo(
+    () => (data === null ? [] : evaluateAlerts(data, fmt, (kmh) => windText(kmh, units))),
+    [data, units],
+  )
+  const advice = useMemo(() => (data === null ? null : weatherAdvice(data)), [data])
+  const trendValues = useMemo(() => data?.hourly.map((point) => point.temperature) ?? [], [data])
+  const trendLabels = useMemo(() => data?.hourly.map((point) => hourLabel(point.time)) ?? [], [data])
+
+  if (!effective.enabled) return null
+
+  // Read-only connections (process-local preferences, host without the
+  // namespace) silently drop writes — disable the controls instead of letting
+  // them look like they worked.
+  const writable = scope.getSnapshot().writable
   const condition = data !== null ? describeCondition(data.current.weatherCode, data.current.isDay) : null
-  const name = placeName()
   const unitSuffix = unitLabel(units)
   const windSuffixLabel = windUnitLabel(units)
 
@@ -649,15 +257,13 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     showTemp ? fmt(data.current.temperature) : undefined,
   ].filter((part): part is string => typeof part === 'string').join(' · ')
 
-  const alerts = data !== null ? evaluateAlerts(data, fmt, (kmh) => windText(kmh, units)) : []
   const hasDanger = alerts.some((alert) => alert.level === 'danger')
   const air = data?.air
   const airInfo = air !== undefined && air.aqi !== undefined ? aqiInfo(air.aqi) : null
-  const advice = data !== null ? weatherAdvice(data) : null
 
   // Derived display values for the extended environment facts.
   const cur = data?.current
-  const windKmhDisplay = windNumber(cur?.windSpeed, units)
+  const windDisplayValue = windNumber(cur?.windSpeed, units)
   const windDeg = cur?.windDirection
   const windTextValue = windDeg !== undefined ? windDirectionText(windDeg) : undefined
   const gustTextValue = cur?.windGusts !== undefined ? windText(cur.windGusts, units) : undefined
@@ -671,10 +277,9 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   // "今日信息" wrap-row entries, assembled conditionally so only fields the
   // feed actually returned are shown.
   const fact = (glyph: GlyphName | undefined, text: string): TodayFactItem => ({ glyph, text })
-  const todayItems: TodayFactItem[] = [
-    fact('sunrise', timeLabel(data?.sunrise)),
-    fact('sunset', timeLabel(data?.sunset)),
-  ]
+  const todayItems: TodayFactItem[] = []
+  if (data?.sunrise !== undefined) todayItems.push(fact('sunrise', timeLabel(data.sunrise)))
+  if (data?.sunset !== undefined) todayItems.push(fact('sunset', timeLabel(data.sunset)))
   if (data?.uvIndexMax !== undefined) todayItems.push(fact('sun', `UV ${Math.round(data.uvIndexMax)} ${uvLevel(data.uvIndexMax)}`))
   if (air?.pm25 !== undefined) todayItems.push(fact(undefined, `PM2.5 ${Math.round(air.pm25)}`))
   if (windTextValue !== undefined) todayItems.push(fact('wind', windTextValue))
@@ -687,20 +292,18 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   const banner = hasDanger ? BANNER.danger : BANNER.warning
 
-  // One "retry" semantics for both error states: re-fetch the CURRENT
-  // location when one exists; only when we never resolved a location does
-  // retry mean "locate again" (and bypass the auto cache).
+  // One "retry" semantics for both error states: re-fetch the CURRENT location
+  // when one exists; only when we never resolved a location does retry mean
+  // "locate again" (and bypass the auto cache).
   const retry = (): void => {
-    if (location === null) {
-      bypassCacheRef.current = true
-      setRelocateTick((n) => n + 1)
-    } else {
-      setTick((n) => n + 1)
-    }
+    if (location === null) relocate()
+    else feed.refresh()
   }
 
   const manualMissingCoords = effective.locationMode === 'manual'
     && (effective.latitude === undefined || effective.longitude === undefined)
+
+  const pendingLabel = status === 'locating' ? '定位中…' : '天气加载中…'
 
   return (
     <div ref={barRef} className="dshw-root" style={{ position: 'relative', display: 'inline-flex', fontSize: 13 }}>
@@ -759,133 +362,210 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             </div>
           )}
 
+          {/* Saved-city / drift feedback while the popover is open (the floating
+              toast is hidden then, so it would otherwise be swallowed). */}
+          {toast !== null && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 12.5, color: TOKEN.fg, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.accent}`, borderRadius: 10, padding: '6px 10px' }}>
+              📍 <span>{toast}</span>
+            </div>
+          )}
+
+          {/* Header + saved-city switcher stay mounted in EVERY status (locating /
+              loading / error) so the user can always switch cities or return to
+              当前位置 — only the forecast body below is status-gated. */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <Glyph name="pin" size={14} />
+              <span style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+              {location?.source === 'gps' && (
+                <span style={{ flex: '0 0 auto', fontSize: 9.5, fontWeight: 700, color: TOKEN.accent, border: `1px solid ${TOKEN.accent}`, borderRadius: 999, padding: '0 5px', lineHeight: '14px' }}>
+                  GPS
+                </span>
+              )}
+              {location?.source === 'ip' && (
+                <span style={{ flex: '0 0 auto', fontSize: 9.5, fontWeight: 700, color: TOKEN.fgMuted, border: `1px solid ${TOKEN.border}`, borderRadius: 999, padding: '0 5px', lineHeight: '14px' }}>
+                  IP
+                </span>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 2, flex: '0 0 auto' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (savedMatch !== undefined) saved.remove(savedMatch.id)
+                  else saved.addCurrent()
+                }}
+                disabled={!writable}
+                title={savedMatch !== undefined ? `取消收藏 ${name}` : '收藏当前城市'}
+                aria-label={savedMatch !== undefined ? `取消收藏 ${name}` : '收藏当前城市'}
+                aria-pressed={savedMatch !== undefined}
+                style={{ ...iconButton, ...(writable ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }}
+              >
+                <span style={{ fontSize: 15, lineHeight: '16px' }}>{savedMatch !== undefined ? '★' : '☆'}</span>
+              </button>
+              <button type="button" onClick={feed.refresh} title="刷新" aria-label="刷新天气" style={iconButton}>
+                <Glyph name="refresh" size={14} />
+              </button>
+            </div>
+          </div>
+
+          {/* Saved-city switcher */}
+          {saved.saved.length > 0 && (
+            <div role="group" aria-label="切换城市" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={saved.useCurrent}
+                aria-pressed={effective.locationMode === 'auto'}
+                style={effective.locationMode === 'auto' ? switchChipActive : switchChip}
+              >
+                当前位置
+              </button>
+              {saved.saved.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  onClick={() => saved.switchTo(entry.id)}
+                  title={`${entry.latitude.toFixed(3)}, ${entry.longitude.toFixed(3)}`}
+                  aria-pressed={saved.activeId === entry.id}
+                  style={saved.activeId === entry.id ? switchChipActive : switchChip}
+                >
+                  {entry.name}
+                </button>
+              ))}
+            </div>
+          )}
+
           {status === 'ready' && data !== null && (
             <>
-              {/* Header: location + refresh */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                  <Glyph name="pin" size={14} />
-                  <span style={{ fontSize: 15, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-                  {location?.source === 'gps' && (
-                    <span style={{ flex: '0 0 auto', fontSize: 9.5, fontWeight: 700, color: TOKEN.accent, border: `1px solid ${TOKEN.accent}`, borderRadius: 999, padding: '0 5px', lineHeight: '14px' }}>
-                      GPS
-                    </span>
-                  )}
-                  {location?.source === 'ip' && (
-                    <span style={{ flex: '0 0 auto', fontSize: 9.5, fontWeight: 700, color: TOKEN.fgMuted, border: `1px solid ${TOKEN.border}`, borderRadius: 999, padding: '0 5px', lineHeight: '14px' }}>
-                      IP
-                    </span>
-                  )}
-                </div>
-                <button type="button" onClick={() => setTick((n) => n + 1)} title="刷新" aria-label="刷新天气" style={iconButton}>
-                  <Glyph name="refresh" size={14} />
-                </button>
-              </div>
-
-              {/* Stale-snapshot banner: the last refresh failed, showing cached data */}
-              {stale && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, lineHeight: '17px', color: BANNER.warning.color, background: BANNER.warning.bg, border: `1px solid ${BANNER.warning.border}`, borderRadius: 10, padding: '6px 10px' }}>
-                  <span style={{ flex: '1 1 auto', minWidth: 0 }}>
-                    数据更新失败{error !== null ? `（${error}）` : ''}，显示 {updatedAt !== null ? `${hhmm(updatedAt)} 的` : '上次'}快照
-                  </span>
-                  <button type="button" onClick={retry} style={actionButton}>⟳ 重试</button>
-                </div>
-              )}
-
-              {/* Alert banner */}
-              {alerts.length > 0 && (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'flex-start',
-                    gap: 6,
-                    marginBottom: 10,
-                    fontSize: 12,
-                    lineHeight: '17px',
-                    color: banner.color,
-                    background: banner.bg,
-                    border: `1px solid ${banner.border}`,
-                    borderRadius: 10,
-                    padding: '6px 10px',
-                  }}
-                >
-                  <span>⚠</span>
-                  <span>{alerts.map((a) => `${a.title}：${a.detail}`).join('；')}</span>
-                </div>
-              )}
-
-              {/* Hero + stat grid (side by side) */}
-              <div data-block="hero-stats" style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 4 }}>
-                <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-                  <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 58, height: 58, borderRadius: 16, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.border}` }}>
-                    <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={36} />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 30, fontWeight: 700, lineHeight: '34px', ...NUM }}>{fmt(data.current.temperature)}</div>
-                    <div style={{ fontSize: 12.5, color: TOKEN.fgMuted, lineHeight: '17px', marginTop: 1 }}>
-                      {condition?.label} · 体感 {fmt(data.current.apparentTemperature)}
+              {day.date !== null ? (
+                /* ── Day detail view ─────────────────────────────────────── */
+                day.error !== null ? (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ color: TOKEN.danger }}>{day.error}</div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                      <button type="button" onClick={day.retry} style={actionButton}>⟳ 重试</button>
+                      <button type="button" onClick={day.close} style={actionButton}>← 返回</button>
                     </div>
                   </div>
-                </div>
-                <div style={{ flex: '1 1 0', minWidth: 0, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
-                  <StatChip
-                    icon={<Glyph name="droplet" size={13} />}
-                    label="湿度"
-                    value={cur?.humidity !== undefined ? `${Math.round(cur.humidity)}%` : '--'}
-                  />
-                  <StatChip
-                    icon={<Glyph name="wind" size={13} />}
-                    label="风速"
-                    value={windKmhDisplay !== undefined ? `${Math.round(windKmhDisplay)}` : '--'}
-                    suffix={windKmhDisplay !== undefined ? windSuffixLabel : undefined}
-                  />
-                  <StatChip icon={<Glyph name="umbrella" size={13} />} label="今日降水" value={`${data.daily[0]?.precipProb ?? 0}%`} />
-                  <StatChip
-                    icon={<Glyph name="wind" size={13} />}
-                    label="空气"
-                    value={airInfo !== null ? `${airInfo.label} ${air?.aqi}` : '--'}
-                    valueColor={airInfo?.color}
-                  />
-                </div>
-              </div>
+                ) : day.detail !== null ? (
+                  <DayDetailPanel detail={day.detail} units={units} onBack={day.close} />
+                ) : (
+                  <div style={{ color: TOKEN.fgMuted, textAlign: 'center', padding: 20 }}>加载当日详情…</div>
+                )
+              ) : (
+                /* ── Normal forecast view ────────────────────────────────── */
+                <>
+                  {/* Stale-snapshot banner: the last refresh failed, showing cached data */}
+                  {feed.stale && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, lineHeight: '17px', color: BANNER.warning.color, background: BANNER.warning.bg, border: `1px solid ${BANNER.warning.border}`, borderRadius: 10, padding: '6px 10px' }}>
+                      <span style={{ flex: '1 1 auto', minWidth: 0 }}>
+                        数据更新失败{error !== null ? `（${error}）` : ''}，显示 {feed.updatedAt !== null ? `${hhmm(feed.updatedAt)} 的` : '上次'}快照
+                      </span>
+                      <button type="button" onClick={retry} style={actionButton}>⟳ 重试</button>
+                    </div>
+                  )}
 
-              {/* Today facts */}
-              <TodayFacts items={todayItems} />
+                  {/* Alert banner */}
+                  {alerts.length > 0 && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 6,
+                        marginBottom: 10,
+                        fontSize: 12,
+                        lineHeight: '17px',
+                        color: banner.color,
+                        background: banner.bg,
+                        border: `1px solid ${banner.border}`,
+                        borderRadius: 10,
+                        padding: '6px 10px',
+                      }}
+                    >
+                      <span>⚠</span>
+                      <span>{alerts.map((a) => `${a.title}：${a.detail}`).join('；')}</span>
+                    </div>
+                  )}
 
-              {/* 15-minute precipitation strip */}
-              {data.minutely !== undefined && data.minutely.length > 0 && (
-                <div data-block="rain" style={{ marginTop: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>未来 6 小时降水</span>
-                    <span style={{ fontSize: 12, fontWeight: 600, color: data.rainSoon?.rainingNow === true || data.rainSoon?.onsetMinutes !== undefined ? TOKEN.accent : TOKEN.fgMuted }}>
-                      {rainTimingText(data.rainSoon ?? { rainingNow: false })}
-                    </span>
+                  {/* Hero + stat grid (side by side) */}
+                  <div data-block="hero-stats" style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 4 }}>
+                    <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 58, height: 58, borderRadius: 16, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.border}` }}>
+                        <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={36} />
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 30, fontWeight: 700, lineHeight: '34px', ...NUM }}>{fmt(data.current.temperature)}</div>
+                        <div style={{ fontSize: 12.5, color: TOKEN.fgMuted, lineHeight: '17px', marginTop: 1 }}>
+                          {condition?.label} · 体感 {fmt(data.current.apparentTemperature)}
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ flex: '1 1 0', minWidth: 0, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                      <StatChip
+                        icon={<Glyph name="droplet" size={13} />}
+                        label="湿度"
+                        value={cur?.humidity !== undefined ? `${Math.round(cur.humidity)}%` : '--'}
+                      />
+                      <StatChip
+                        icon={<Glyph name="wind" size={13} />}
+                        label="风速"
+                        value={windDisplayValue !== undefined ? `${Math.round(windDisplayValue)}` : '--'}
+                        suffix={windDisplayValue !== undefined ? windSuffixLabel : undefined}
+                      />
+                      <StatChip icon={<Glyph name="umbrella" size={13} />} label="今日降水" value={data.daily[0] !== undefined ? `${data.daily[0].precipProb}%` : '--'} />
+                      <StatChip
+                        icon={<Glyph name="wind" size={13} />}
+                        label="空气"
+                        value={airInfo !== null ? `${airInfo.label} ${air?.aqi}` : '--'}
+                        valueColor={airInfo?.color}
+                      />
+                    </div>
                   </div>
-                  <RainStrip points={data.minutely} />
-                </div>
+
+                  {/* Today facts */}
+                  <TodayFacts items={todayItems} />
+
+                  {/* 15-minute precipitation strip */}
+                  {data.minutely !== undefined && data.minutely.length > 0 && (
+                    <div data-block="rain" style={{ marginTop: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>未来 6 小时降水</span>
+                        <span style={{ fontSize: 12, fontWeight: 600, color: data.rainSoon?.rainingNow === true || data.rainSoon?.onsetMinutes !== undefined ? TOKEN.accent : TOKEN.fgMuted }}>
+                          {rainTimingText(data.rainSoon ?? { rainingNow: false })}
+                        </span>
+                      </div>
+                      <RainStrip points={data.minutely} />
+                    </div>
+                  )}
+
+                  {/* One-line advice */}
+                  {advice !== null && (
+                    <div data-block="advice" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 12.5, color: TOKEN.fgMuted, background: TOKEN.bgSoft, borderRadius: 10, padding: '8px 12px' }}>
+                      <span>{advice.icon}</span>
+                      <span>{advice.text}</span>
+                    </div>
+                  )}
+
+                  <div data-block="trend" style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 4 }}>未来 24 小时温度</div>
+                    <TrendChart
+                      values={trendValues}
+                      labels={trendLabels}
+                      unit={unitSuffix}
+                      height={56}
+                    />
+                  </div>
+
+                  <HourlyStrip title="未来 12 小时" points={data.hourly.slice(0, 12)} fmt={fmt} />
+
+                  <DailyList
+                    title="未来 7 天（点击查看当日详情）"
+                    points={data.daily}
+                    fmt={fmt}
+                    onSelectDay={day.open}
+                  />
+                </>
               )}
-
-              {/* One-line advice */}
-              {advice !== null && (
-                <div data-block="advice" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 12.5, color: TOKEN.fgMuted, background: TOKEN.bgSoft, borderRadius: 10, padding: '8px 12px' }}>
-                  <span>{advice.icon}</span>
-                  <span>{advice.text}</span>
-                </div>
-              )}
-
-              <div data-block="trend" style={{ marginTop: 10 }}>
-                <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 4 }}>未来 24 小时温度</div>
-                <TrendChart
-                  values={data.hourly.map((point) => point.temperature)}
-                  labels={data.hourly.map((point) => hourLabel(point.time))}
-                  unit={unitSuffix}
-                  height={56}
-                />
-              </div>
-
-              <HourlyStrip title="未来 12 小时" points={data.hourly.slice(0, 12)} fmt={fmt} />
-
-              <DailyList title="未来 7 天" points={data.daily} fmt={fmt} />
 
               {/* Footer controls */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${TOKEN.border}` }}>
@@ -893,28 +573,27 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                 <div role="group" aria-label="温度单位" style={{ display: 'flex', background: TOKEN.bgSoft, borderRadius: 999, padding: 2 }}>
                   <button
                     type="button"
-                    onClick={() => void scope.set('units', 'celsius')}
-                    style={{ ...segmentButton, fontWeight: units === 'celsius' ? 700 : 400, background: units === 'celsius' ? TOKEN.bg : 'transparent' }}
+                    disabled={!writable}
+                    aria-pressed={units === 'celsius'}
+                    onClick={() => { void writer.write('units', 'celsius') }}
+                    title={writable ? undefined : '当前连接不支持修改设置'}
+                    style={{ ...segmentButton, fontWeight: units === 'celsius' ? 700 : 400, background: units === 'celsius' ? TOKEN.bg : 'transparent', ...(writable ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }}
                   >
                     °C
                   </button>
                   <button
                     type="button"
-                    onClick={() => void scope.set('units', 'fahrenheit')}
-                    style={{ ...segmentButton, fontWeight: units === 'fahrenheit' ? 700 : 400, background: units === 'fahrenheit' ? TOKEN.bg : 'transparent' }}
+                    disabled={!writable}
+                    aria-pressed={units === 'fahrenheit'}
+                    onClick={() => { void writer.write('units', 'fahrenheit') }}
+                    title={writable ? undefined : '当前连接不支持修改设置'}
+                    style={{ ...segmentButton, fontWeight: units === 'fahrenheit' ? 700 : 400, background: units === 'fahrenheit' ? TOKEN.bg : 'transparent', ...(writable ? {} : { opacity: 0.5, cursor: 'not-allowed' }) }}
                   >
                     °F
                   </button>
                 </div>
                 {effective.locationMode === 'auto' && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      bypassCacheRef.current = true
-                      setRelocateTick((n) => n + 1)
-                    }}
-                    style={actionButton}
-                  >
+                  <button type="button" onClick={relocate} style={actionButton}>
                     📍 重新定位
                   </button>
                 )}
@@ -924,16 +603,15 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
           {status !== 'ready' && status !== 'error' && (
             <div style={{ color: TOKEN.fgMuted, textAlign: 'center', padding: 20 }}>
-              {status === 'locating' ? '定位中…' : '天气加载中…'}
+              {pendingLabel}
             </div>
           )}
         </div>
       )}
 
-      {/* IP-drift toast: shown under the chip when the network moved and the
-          location auto-switched (hidden while the popover is open so they do
-          not overlap). Anchors to the same side as the popover. */}
-      {driftNotice !== null && !open && (
+      {/* Under-chip toast: IP-drift city switches and saved-city feedback.
+          Hidden while the popover is open so they do not overlap. */}
+      {toast !== null && !open && (
         <div
           style={{
             position: 'absolute',
@@ -947,15 +625,100 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             color: TOKEN.fg,
             border: `1px solid ${TOKEN.accent}`,
             borderRadius: 10,
-            boxShadow: '0 8px 24px rgba(0, 0, 0, 0.18)',
+            boxShadow: SHADOW.floating,
             padding: '6px 12px',
             fontSize: 12.5,
             whiteSpace: 'nowrap',
           }}
         >
-          📍 网络变化，已切换到 <b>{driftNotice}</b>
+          📍 <b>{toast}</b>
         </div>
       )}
     </div>
   )
+}
+
+/** Chip-level geometry/styles (kept beside the component they style). */
+const chipButton: CSSProperties = {
+  ...baseButton,
+  display: 'flex',
+  alignItems: 'baseline',
+  gap: 6,
+  background: TOKEN.bgSoft,
+  color: TOKEN.fg,
+  border: `1px solid ${TOKEN.border}`,
+  borderRadius: 999,
+  padding: '3px 10px 3px 5px',
+  cursor: 'pointer',
+  maxWidth: 'min(280px, 42vw)',
+  textAlign: 'left',
+}
+
+const chipIconWrap: CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 24,
+  height: 24,
+  borderRadius: '50%',
+  background: TOKEN.bg,
+  border: `1px solid ${TOKEN.border}`,
+  color: TOKEN.fg,
+  alignSelf: 'center',
+}
+
+const chipTemp: CSSProperties = { fontSize: 17, fontWeight: 700, lineHeight: '22px', ...NUM, flex: '0 0 auto' }
+
+const chipCondition: CSSProperties = { fontSize: 14, lineHeight: '20px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', flex: '0 0 auto' }
+
+const clockSpan: CSSProperties = {
+  flex: '0 0 auto',
+  fontSize: 14,
+  lineHeight: '20px',
+  color: TOKEN.fgMuted,
+  whiteSpace: 'nowrap',
+  paddingLeft: 8,
+  borderLeft: `1px solid ${TOKEN.border}`,
+  ...NUM,
+}
+
+const switchChip: CSSProperties = {
+  ...baseButton,
+  flex: '0 0 auto',
+  fontSize: 12,
+  lineHeight: '18px',
+  color: TOKEN.fg,
+  background: TOKEN.bgSoft,
+  border: `1px solid ${TOKEN.border}`,
+  borderRadius: 999,
+  padding: '2px 10px',
+  cursor: 'pointer',
+  maxWidth: 140,
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap',
+}
+
+const switchChipActive: CSSProperties = {
+  ...switchChip,
+  border: `1px solid ${TOKEN.accent}`,
+  color: TOKEN.accent,
+  fontWeight: 600,
+}
+
+const popoverStyle: CSSProperties = {
+  position: 'absolute',
+  top: 'calc(100% + 8px)',
+  zIndex: 60,
+  maxWidth: 'calc(100vw - 24px)',
+  maxHeight: 'calc(100vh - 150px)',
+  overflowY: 'auto',
+  background: TOKEN.bg,
+  color: TOKEN.fg,
+  border: `1px solid ${TOKEN.border}`,
+  borderRadius: 16,
+  boxShadow: SHADOW.popover,
+  padding: 14,
+  fontSize: 13.5,
+  textAlign: 'left',
 }

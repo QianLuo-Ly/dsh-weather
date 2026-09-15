@@ -8,21 +8,46 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import { DEFAULT_WEATHER_CONFIG, LAT_RANGE, LON_RANGE, REFRESH_RANGE, WEATHER_NS, type WeatherConfig } from './config-shared'
+import {
+  BRIEF_TIMES,
+  CLOCK_TIME_PATTERN,
+  DEFAULT_WEATHER_CONFIG,
+  LAT_RANGE,
+  LON_RANGE,
+  MAX_ID_LENGTH,
+  MAX_NAME_LENGTH,
+  MAX_SAVED_LOCATIONS,
+  REFRESH_RANGE,
+  WEATHER_NS,
+  type WeatherConfig,
+} from './config-shared'
 // Local shim for the runtime `ctx.settings` service (see dsh-settings.d.ts).
 import type {} from './dsh-settings'
 
 /**
- * Settings schema for the `weather` namespace. Field bounds derive from
- * config-shared constants (REFRESH_RANGE / LAT_RANGE / LON_RANGE) so the Host
- * validation, the client fallback and the settings slider can never drift.
+ * Settings schema for the `weather` namespace. Every bound derives from a
+ * config-shared constant (REFRESH_RANGE / LAT_RANGE / LON_RANGE / MAX_* /
+ * BRIEF_TIMES / CLOCK_TIME_PATTERN) so the Host validation, the client
+ * fallback, the sanitizer and the settings UI can never drift apart.
+ *
+ * Note: the array entry coordinates are intentionally NOT range-bounded here.
+ * A hand-edited document with one bad entry would otherwise reject the whole
+ * section (and the plugin registration along with it); the client drops bad
+ * entries individually in `sanitizeSavedLocations`.
  */
 export const WeatherConfigSchema = z.object({
   enabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.enabled),
   locationMode: z.union([z.const('auto'), z.const('manual')]).default(DEFAULT_WEATHER_CONFIG.locationMode),
   latitude: z.number().min(LAT_RANGE.min).max(LAT_RANGE.max).required(false),
   longitude: z.number().min(LON_RANGE.min).max(LON_RANGE.max).required(false),
-  cityName: z.string().required(false),
+  cityName: z.string().max(MAX_NAME_LENGTH).required(false),
+  savedLocations: z.array(z.object({
+    id: z.string().max(MAX_ID_LENGTH),
+    name: z.string().max(MAX_NAME_LENGTH),
+    latitude: z.number(),
+    longitude: z.number(),
+  })).max(MAX_SAVED_LOCATIONS).default([]),
+  activeSavedId: z.string().max(MAX_ID_LENGTH).required(false),
   units: z.union([z.const('celsius'), z.const('fahrenheit')]).default(DEFAULT_WEATHER_CONFIG.units),
   refreshMinutes: z.number()
     .step(REFRESH_RANGE.step)
@@ -30,11 +55,14 @@ export const WeatherConfigSchema = z.object({
     .max(REFRESH_RANGE.max)
     .default(DEFAULT_WEATHER_CONFIG.refreshMinutes),
   alertsEnabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.alertsEnabled),
+  briefEnabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.briefEnabled),
+  briefMorning: z.string().pattern(CLOCK_TIME_PATTERN).default(BRIEF_TIMES.morning),
+  briefEvening: z.string().pattern(CLOCK_TIME_PATTERN).default(BRIEF_TIMES.evening),
   // Internal auto-location cache (written by the browser half, kept out of the
   // settings UI so the resolved location stays stable across refreshes).
   autoLatitude: z.number().min(LAT_RANGE.min).max(LAT_RANGE.max).required(false),
   autoLongitude: z.number().min(LON_RANGE.min).max(LON_RANGE.max).required(false),
-  autoCityName: z.string().required(false),
+  autoCityName: z.string().max(MAX_NAME_LENGTH).required(false),
   autoSource: z.union([z.const('gps'), z.const('ip')]).required(false),
 })
 

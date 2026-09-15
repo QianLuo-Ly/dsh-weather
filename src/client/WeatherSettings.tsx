@@ -1,18 +1,34 @@
 /**
  * Weather configuration page, registered into `settings.section`. Owns the
  * durable settings: visibility, location mode (auto / manual with city search),
- * temperature unit, and refresh interval. Writes go through `scope.set(...)`
- * with the settings transport's revision fencing.
+ * saved cities, temperature unit, refresh interval and the daily-brief times.
  *
- * Coordinate inputs are local drafts committed on blur: typing `-`, `1e5` or
- * an out-of-range value must never be persisted mid-keystroke (the previous
- * version wrote `NaN` straight into settings on every keypress).
+ * Write discipline:
+ * - Text/number/range inputs keep a local draft and commit on blur / Enter /
+ *   pointer-up, so typing never fires a settings RPC per keystroke (and a
+ *   length-capped field cannot "eat" further keystrokes).
+ * - Every write is verified by reading the snapshot back: the transport
+ *   resolves even when the Host rejects a value, so success is never assumed.
+ * - Any edit that makes the displayed location stop being a saved city clears
+ *   `activeSavedId`, so the chip/list highlight can never point at another city.
  */
-import { useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import { DEFAULT_WEATHER_CONFIG, LAT_RANGE, LON_RANGE, REFRESH_RANGE, sanitizeConfig, type WeatherConfig } from '../config-shared'
+import {
+  DEFAULT_WEATHER_CONFIG,
+  LAT_RANGE,
+  LON_RANGE,
+  MAX_NAME_LENGTH,
+  MAX_SAVED_LOCATIONS,
+  parseClockTime,
+  REFRESH_RANGE,
+  sameConfig,
+  sanitizeConfig,
+  type WeatherConfig,
+} from '../config-shared'
 import { runLocationDiagnostics, searchCity, type GeoLocation, type LocationDiagnostics } from './weather-api'
-import { TOKEN } from './theme'
+import { useSavedLocations, type NoticeKind } from './hooks'
+import { SHADOW, TOKEN } from './theme'
 
 export interface WeatherSettingsSectionProps {
   scope: SettingsScope<WeatherConfig>
@@ -26,6 +42,9 @@ const ACCENT = TOKEN.accent
 const BG_ROW = TOKEN.bgSoft
 const INPUT_BG = TOKEN.bgRaised
 const DANGER = TOKEN.danger
+const OK = '#2f9e44'
+
+interface Notice { text: string; kind: NoticeKind }
 
 export function WeatherSettingsSection(props: WeatherSettingsSectionProps): ReactElement {
   const { scope } = props
@@ -33,26 +52,43 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   const [search, setSearch] = useState('')
   const [suggestions, setSuggestions] = useState<GeoLocation[]>([])
   const [searching, setSearching] = useState(false)
-  const [notice, setNotice] = useState<string | null>(null)
+  const [notice, setNotice] = useState<Notice | null>(null)
   const [diag, setDiag] = useState<LocationDiagnostics | null>(null)
   const [diagBusy, setDiagBusy] = useState(false)
-  // Local drafts for the coordinate inputs — committed to settings on blur.
+  // Local drafts — committed on blur / Enter / pointer-up instead of per key.
   const [latInput, setLatInput] = useState('')
   const [lonInput, setLonInput] = useState('')
+  const [nameInput, setNameInput] = useState('')
+  const [refreshInput, setRefreshInput] = useState(DEFAULT_WEATHER_CONFIG.refreshMinutes)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
+  const [permission, setPermission] = useState<NotificationPermission>(() => (
+    typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+  ))
   const ids = useId()
+  const skipNextSearchRef = useRef(false)
+  const searchBoxRef = useRef<HTMLDivElement>(null)
+  const diagRunRef = useRef(0)
 
   const effective = config ?? DEFAULT_WEATHER_CONFIG
+  const snapshot = scope.getSnapshot()
+
+  const notify = useCallback((text: string, kind: NoticeKind = 'ok'): void => {
+    setNotice({ text, kind })
+  }, [])
+  const clearNotice = useCallback((): void => setNotice(null), [])
 
   useEffect(() => {
-    const sync = (): void => setConfig(sanitizeConfig(scope.getSnapshot().value))
+    const sync = (): void => {
+      const next = sanitizeConfig(scope.getSnapshot().value)
+      setConfig((prev) => (sameConfig(prev, next) ? prev : next))
+    }
     sync()
     return scope.subscribe(sync)
   }, [scope])
 
-  // Sync each coordinate draft from the stored config, but only the field that
-  // actually changed (prev-value diff). A commit/blur or an external write
-  // (city search) then updates its own input without clobbering the other
-  // input's uncommitted draft.
+  // Seed drafts from the stored config, but only the field that actually
+  // changed — a commit (or a city search) updates its own input without
+  // clobbering another input's uncommitted draft.
   const prevCoordsRef = useRef({ lat: effective.latitude, lon: effective.longitude })
   useEffect(() => {
     const prev = prevCoordsRef.current
@@ -61,8 +97,53 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     prevCoordsRef.current = { lat: effective.latitude, lon: effective.longitude }
   }, [effective.latitude, effective.longitude])
 
+  useEffect(() => {
+    setNameInput(effective.cityName ?? '')
+  }, [effective.cityName])
+
+  useEffect(() => {
+    setRefreshInput(effective.refreshMinutes)
+  }, [effective.refreshMinutes])
+
+  // Manual↔auto switches must not leave a stale suggestion dropdown behind.
+  useEffect(() => {
+    setSuggestions([])
+    setSearching(false)
+  }, [effective.locationMode])
+
+  // Dropdown closes on outside click (Esc is handled on the input itself).
+  useEffect(() => {
+    if (suggestions.length === 0) return
+    const onPointerDown = (event: MouseEvent): void => {
+      if (searchBoxRef.current !== null && !searchBoxRef.current.contains(event.target as Node)) {
+        setSuggestions([])
+      }
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [suggestions.length])
+
+  // Notification permission can change in browser settings; re-read on focus.
+  useEffect(() => {
+    const refresh = (): void => setPermission(typeof Notification !== 'undefined' ? Notification.permission : 'denied')
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [])
+
+  // Invalidate any in-flight diagnostics when the page unmounts.
+  useEffect(() => () => { diagRunRef.current += 1 }, [])
+
   // 250ms 防抖：避免每次击键都请求 Open-Meteo Geocoding。
   useEffect(() => {
+    if (skipNextSearchRef.current) {
+      // Programmatic value (a picked result) — do not re-open the dropdown.
+      skipNextSearchRef.current = false
+      return
+    }
     const trimmed = search.trim()
     if (trimmed === '') {
       setSuggestions([])
@@ -83,42 +164,116 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
     }
   }, [search])
 
-  const snapshot = scope.getSnapshot()
-  const writable = snapshot.writable
-
-  const set = (field: keyof WeatherConfig, value: unknown): void => {
-    if (!writable) {
-      // No per-field transport available (read-only connection) — do not claim
-      // the change "applies for this session" because it would not.
-      setNotice('当前连接不支持修改设置（只读）')
+  /**
+   * Issue one or more settings writes as a synchronous batch (the transport
+   * publishes only the final state of a batch) and verify the resulting
+   * snapshot — a Host rejection must surface as a notice, never as a silent
+   * no-op.
+   */
+  const commit = useCallback((fields: Array<[keyof WeatherConfig, unknown]>, clears: Array<keyof WeatherConfig> = []): void => {
+    if (!scope.getSnapshot().writable) {
+      notify('当前连接不支持修改设置（只读）', 'err')
       return
     }
-    void scope.set(field as string, value).catch(() => setNotice('写入失败，请重试'))
-  }
+    const pending: Array<Promise<unknown>> = []
+    for (const [field, value] of fields) pending.push(scope.set(field as string, value))
+    for (const field of clears) pending.push(scope.unset(field as string))
+    void Promise.all(pending).then(() => {
+      const current = scope.getSnapshot().value as Record<string, unknown> | undefined
+      const accepted = current !== undefined
+        && fields.every(([field, value]) => JSON.stringify(current[field as string]) === JSON.stringify(value))
+        && clears.every((field) => current[field as string] === undefined)
+      if (!accepted) notify('该设置未被接受，请重试', 'err')
+    }).catch(() => notify('写入失败，请重试', 'err'))
+  }, [scope, notify])
 
-  /** Commit a coordinate draft after validation (blur / Enter). Only the
-   * offending draft is reset on failure — never the other, still-valid one. */
-  const commitCoordinate = (kind: 'latitude' | 'longitude', text: string): void => {
+  const set = useCallback((field: keyof WeatherConfig, value: unknown): void => {
+    commit([[field, value]])
+  }, [commit])
+
+  // Saved-city management lives in the shared hook (same code path as the chip),
+  // with feedback routed into this page's notice line.
+  const savedCities = useSavedLocations({ scope, effective, onNotice: notify })
+
+  const requestNotificationPermission = useCallback((): void => {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'default') return
+    void Notification.requestPermission().then(() => {
+      setPermission(typeof Notification !== 'undefined' ? Notification.permission : 'denied')
+    })
+  }, [])
+
+  /** Commit a coordinate draft after validation (blur / Enter). A bad parse
+   * (`value === ''` from letters in a number input) is treated as invalid, not
+   * as "clear the coordinate". */
+  const commitCoordinate = (kind: 'latitude' | 'longitude', input: HTMLInputElement): void => {
     const range = kind === 'latitude' ? LAT_RANGE : LON_RANGE
     const label = kind === 'latitude' ? '纬度' : '经度'
-    const trimmed = text.trim()
     const revertDraft = (): void => {
       if (kind === 'latitude') setLatInput(effective.latitude?.toString() ?? '')
       else setLonInput(effective.longitude?.toString() ?? '')
     }
-    if (trimmed === '') {
-      set(kind, undefined)
-      return
-    }
-    const value = Number(trimmed)
-    if (!Number.isFinite(value) || value < range.min || value > range.max) {
-      setNotice(`${label}须在 ${range.min}~${range.max} 之间（当前输入未保存）`)
+    if (input.validity.badInput) {
+      notify(`${label}格式不正确（未保存）`, 'err')
       revertDraft()
       return
     }
-    setNotice(null)
-    set(kind, value)
+    const text = input.value.trim()
+    if (text === '') {
+      // Clearing coordinates also drops the saved-city highlight (custom/absent).
+      commit([], [kind, 'activeSavedId'])
+      return
+    }
+    const value = Number(text)
+    if (!Number.isFinite(value) || value < range.min || value > range.max) {
+      notify(`${label}须在 ${range.min}~${range.max} 之间（当前输入未保存）`, 'err')
+      revertDraft()
+      return
+    }
+    if (value === effective[kind]) return
+    commit([[kind, value]], ['activeSavedId'])
   }
+
+  /** Commit the display-name draft; renaming means custom coordinates, so the
+   * saved-city highlight is cleared too. */
+  const commitName = (input: HTMLInputElement): void => {
+    const next = input.value.trim().slice(0, MAX_NAME_LENGTH)
+    if (next === effective.cityName) return
+    if (next === '') {
+      commit([], ['cityName', 'activeSavedId'])
+      return
+    }
+    commit([['cityName', next]], ['activeSavedId'])
+  }
+
+  /** Commit the refresh-interval draft. */
+  const commitRefresh = (): void => {
+    if (refreshInput === effective.refreshMinutes) return
+    set('refreshMinutes', refreshInput)
+  }
+
+  /** Commit a `<input type="time">` value only when it parses to `HH:MM`. */
+  const commitClockTime = (field: 'briefMorning' | 'briefEvening', text: string): void => {
+    const parsed = parseClockTime(text)
+    if (parsed === undefined) {
+      notify('时间格式应为 HH:MM', 'err')
+      return
+    }
+    const other = field === 'briefMorning' ? effective.briefEvening : effective.briefMorning
+    if (parsed === other) {
+      notify('早上与晚间简报时间不能相同', 'err')
+      return
+    }
+    if (parsed === effective[field]) return
+    clearNotice()
+    set(field, parsed)
+  }
+
+  const atSavedLimit = savedCities.saved.length >= MAX_SAVED_LOCATIONS
+  const permissionHint = permission === 'denied'
+    ? '通知权限已被浏览器拒绝，请在站点设置中允许后重新开启。'
+    : permission === 'default'
+      ? '浏览器通知尚未授权——开启时请允许，否则提醒与简报不会推送。'
+      : null
 
   return (
     <div style={{ maxWidth: 560, padding: '4px 0 20px', color: FG }}>
@@ -144,20 +299,66 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
           checked={effective.alertsEnabled}
           onChange={(event) => {
             set('alertsEnabled', event.target.checked)
-            if (event.target.checked && typeof Notification !== 'undefined' && Notification.permission === 'default') {
-              void Notification.requestPermission()
-            }
+            if (event.target.checked) requestNotificationPermission()
           }}
           style={checkbox}
         />
       </Row>
-      {effective.alertsEnabled && typeof Notification !== 'undefined' && Notification.permission === 'denied' && (
-        <div style={{ color: DANGER, fontSize: 12, margin: '-2px 0 10px 12px' }}>
-          通知权限已被浏览器拒绝，请在站点设置中允许后重新开启。
+      {effective.alertsEnabled && permissionHint !== null && (
+        <div style={{ color: permission === 'denied' ? DANGER : MUTED, fontSize: 12, margin: '-2px 0 10px 12px' }}>
+          {permissionHint}
         </div>
       )}
       <div style={{ color: MUTED, fontSize: 12, margin: '-2px 0 10px 12px' }}>
         强降雨 / 雷暴 / 高温 / 大风 / 强降雪时发送浏览器通知。
+      </div>
+
+      <Row label="每日天气简报" labelFor={`${ids}-brief`}>
+        <input
+          id={`${ids}-brief`}
+          type="checkbox"
+          checked={effective.briefEnabled}
+          onChange={(event) => {
+            set('briefEnabled', event.target.checked)
+            if (event.target.checked) requestNotificationPermission()
+          }}
+          style={checkbox}
+        />
+      </Row>
+      {effective.briefEnabled && permissionHint !== null && (
+        <div style={{ color: permission === 'denied' ? DANGER : MUTED, fontSize: 12, margin: '-2px 0 10px 12px' }}>
+          {permissionHint}
+        </div>
+      )}
+
+      {effective.briefEnabled && (
+        <>
+          <Row label="早上简报时间" labelFor={`${ids}-brief-morning`}>
+            <input
+              id={`${ids}-brief-morning`}
+              type="time"
+              value={effective.briefMorning}
+              aria-label="早上简报时间（HH:MM）"
+              onChange={(event) => commitClockTime('briefMorning', event.currentTarget.value)}
+              style={{ ...input, width: 120 }}
+            />
+            <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送今日天气</span>
+          </Row>
+          <Row label="晚间简报时间" labelFor={`${ids}-brief-evening`}>
+            <input
+              id={`${ids}-brief-evening`}
+              type="time"
+              value={effective.briefEvening}
+              aria-label="晚间简报时间（HH:MM）"
+              onChange={(event) => commitClockTime('briefEvening', event.currentTarget.value)}
+              style={{ ...input, width: 120 }}
+            />
+            <span style={{ color: MUTED, fontSize: 12, whiteSpace: 'nowrap' }}>推送明日天气</span>
+          </Row>
+        </>
+      )}
+      <div style={{ color: MUTED, fontSize: 12, margin: '-2px 0 10px 12px' }}>
+        到点后通过浏览器通知推送（按本机时间，最多补发 2 小时）：早上＝今日最高/最低与降水概率，晚上＝明日概况。
       </div>
 
       <Row label="定位方式">
@@ -167,7 +368,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
               type="radio"
               name="dsh-weather-location-mode"
               checked={effective.locationMode === 'auto'}
-              onChange={() => set('locationMode', 'auto')}
+              onChange={() => commit([['locationMode', 'auto']], ['activeSavedId'])}
             />
             自动（GPS 定位，失败回退 IP）
           </label>
@@ -176,7 +377,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
               type="radio"
               name="dsh-weather-location-mode"
               checked={effective.locationMode === 'manual'}
-              onChange={() => set('locationMode', 'manual')}
+              onChange={() => commit([['locationMode', 'manual']], ['activeSavedId'])}
             />
             手动
           </label>
@@ -186,15 +387,18 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
       {effective.locationMode === 'manual' && (
         <>
           <Row label="城市搜索" labelFor={`${ids}-search`}>
-            <div style={{ position: 'relative', flex: 1 }}>
+            <div ref={searchBoxRef} style={{ position: 'relative', flex: 1 }}>
               <input
                 id={`${ids}-search`}
                 type="text"
                 value={search}
+                maxLength={MAX_NAME_LENGTH}
                 placeholder="输入城市名，如：北京 / Beijing"
                 onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Escape') setSuggestions([]) }}
                 style={input}
                 aria-label="搜索城市"
+                aria-expanded={suggestions.length > 0}
               />
               {searching && <span style={{ position: 'absolute', right: 8, top: 7, fontSize: 12, color: MUTED }}>搜索中…</span>}
               {suggestions.length > 0 && (
@@ -202,32 +406,52 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                   id={`${ids}-suggestions`}
                   role="list"
                   aria-label="城市搜索结果"
-                  style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, background: INPUT_BG, border: `1px solid ${BORDER}`, borderRadius: 10, boxShadow: '0 8px 24px rgba(0,0,0,0.12)', zIndex: 10, overflow: 'hidden', maxHeight: 240, overflowY: 'auto' }}
+                  style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, background: INPUT_BG, border: `1px solid ${BORDER}`, borderRadius: 10, boxShadow: SHADOW.dropdown, zIndex: 10, overflow: 'hidden', maxHeight: 240, overflowY: 'auto' }}
                 >
-                  {suggestions.map((place) => (
-                    <button
-                      key={`${place.latitude},${place.longitude},${place.name}`}
-                      type="button"
-                      onClick={() => {
-                        // Write the whole manual location in one committed set —
-                        // name + coordinates change together to avoid a brief
-                        // "new city name at old coordinates" intermediate state.
-                        set('locationMode', 'manual')
-                        void scope.set('cityName', place.name).then(() =>
-                          Promise.all([
-                            scope.set('latitude', place.latitude),
-                            scope.set('longitude', place.longitude),
-                          ]),
-                        ).catch(() => setNotice('写入失败，请重试'))
-                        setSearch(place.name)
-                        setSuggestions([])
-                      }}
-                      style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13, color: FG }}
-                    >
-                      {place.name}
-                      <span style={{ color: MUTED, fontSize: 12 }}>　{place.latitude.toFixed(2)}, {place.longitude.toFixed(2)}</span>
-                    </button>
-                  ))}
+                  {suggestions.map((place) => {
+                    const alreadySaved = savedCities.isSaved(place.latitude, place.longitude)
+                    return (
+                      <div key={`${place.latitude},${place.longitude},${place.name}`} style={{ display: 'flex', alignItems: 'center', gap: 6, paddingRight: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Selecting a place = custom coordinates (the hook
+                            // writes coords+name in one batch and clears any
+                            // active saved id).
+                            savedCities.selectPlace(place)
+                            // Skip the debounce re-search only when the text
+                            // actually changes — a no-op setState would not run
+                            // the effect and would leave the guard armed.
+                            if (place.name !== search) {
+                              skipNextSearchRef.current = true
+                              setSearch(place.name)
+                            }
+                            setSuggestions([])
+                          }}
+                          style={{ flex: 1, minWidth: 0, textAlign: 'left', padding: '8px 12px', background: 'transparent', border: 'none', cursor: 'pointer', fontSize: 13, color: FG }}
+                        >
+                          {place.name}
+                          <span style={{ color: MUTED, fontSize: 12 }}>　{place.latitude.toFixed(2)}, {place.longitude.toFixed(2)}</span>
+                        </button>
+                        {/* Saving must not switch the location or clear the search. */}
+                        <button
+                          type="button"
+                          disabled={alreadySaved || atSavedLimit}
+                          aria-label={alreadySaved ? `${place.name} 已收藏` : `收藏 ${place.name}`}
+                          onClick={() => savedCities.addPlace({ name: place.name, latitude: place.latitude, longitude: place.longitude })}
+                          style={{
+                            ...inputButton,
+                            padding: '3px 8px',
+                            fontSize: 12,
+                            whiteSpace: 'nowrap',
+                            ...(alreadySaved || atSavedLimit ? { color: MUTED, cursor: 'default' } : {}),
+                          }}
+                        >
+                          {alreadySaved ? '已收藏' : '☆ 收藏'}
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -242,9 +466,9 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                 value={latInput}
                 aria-label="纬度（-90 ~ 90）"
                 placeholder="纬度"
-                onChange={(event) => { setNotice(null); setLatInput(event.target.value) }}
-                onBlur={(event) => commitCoordinate('latitude', event.currentTarget.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') commitCoordinate('latitude', event.currentTarget.value) }}
+                onChange={(event) => { clearNotice(); setLatInput(event.target.value) }}
+                onBlur={(event) => commitCoordinate('latitude', event.currentTarget)}
+                onKeyDown={(event) => { if (event.key === 'Enter') commitCoordinate('latitude', event.currentTarget) }}
                 style={{ ...input, width: 120 }}
               />
               <span style={{ color: MUTED }}>/</span>
@@ -256,9 +480,9 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
                 value={lonInput}
                 aria-label="经度（-180 ~ 180）"
                 placeholder="经度"
-                onChange={(event) => { setNotice(null); setLonInput(event.target.value) }}
-                onBlur={(event) => commitCoordinate('longitude', event.currentTarget.value)}
-                onKeyDown={(event) => { if (event.key === 'Enter') commitCoordinate('longitude', event.currentTarget.value) }}
+                onChange={(event) => { clearNotice(); setLonInput(event.target.value) }}
+                onBlur={(event) => commitCoordinate('longitude', event.currentTarget)}
+                onKeyDown={(event) => { if (event.key === 'Enter') commitCoordinate('longitude', event.currentTarget) }}
                 style={{ ...input, width: 120 }}
               />
             </div>
@@ -267,14 +491,92 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
             <input
               id={`${ids}-cityname`}
               type="text"
-              value={effective.cityName ?? ''}
+              value={nameInput}
+              maxLength={MAX_NAME_LENGTH}
               placeholder="如：北京"
-              onChange={(event) => set('cityName', event.target.value === '' ? undefined : event.target.value)}
+              onChange={(event) => { clearNotice(); setNameInput(event.target.value) }}
+              onBlur={(event) => commitName(event.currentTarget)}
+              onKeyDown={(event) => { if (event.key === 'Enter') commitName(event.currentTarget) }}
               style={input}
             />
           </Row>
         </>
       )}
+
+      <div style={{ padding: '10px 12px', marginBottom: 8, background: BG_ROW, borderRadius: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+          <span style={{ fontSize: 13 }}>收藏城市（{savedCities.saved.length}/{MAX_SAVED_LOCATIONS}）</span>
+          <button
+            type="button"
+            onClick={savedCities.addCurrent}
+            disabled={atSavedLimit}
+            title={atSavedLimit ? `最多收藏 ${MAX_SAVED_LOCATIONS} 个城市` : undefined}
+            style={{ ...inputButton, padding: '5px 12px', fontSize: 12.5, ...(atSavedLimit ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
+          >
+            ＋ 收藏当前位置
+          </button>
+        </div>
+        {savedCities.saved.length === 0 ? (
+          <div style={{ color: MUTED, fontSize: 12 }}>
+            还没有收藏城市——搜索城市后点 ☆ 收藏，或收藏当前位置。
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {savedCities.saved.map((place) => {
+              const active = savedCities.activeId === place.id
+              const confirming = pendingDeleteId === place.id
+              return (
+                <div
+                  key={place.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '6px 8px',
+                    border: `1px solid ${active ? ACCENT : BORDER}`,
+                    borderRadius: 8,
+                    background: active ? INPUT_BG : 'transparent',
+                  }}
+                >
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 13 }}>
+                    {place.name}
+                    <span style={{ color: MUTED, fontSize: 12 }}>　{place.latitude.toFixed(3)}, {place.longitude.toFixed(3)}</span>
+                  </span>
+                  {active && (
+                    <span aria-current="true" style={{ fontSize: 11, color: ACCENT, border: `1px solid ${ACCENT}`, borderRadius: 6, padding: '0 5px', whiteSpace: 'nowrap' }}>
+                      当前
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => savedCities.switchTo(place.id)}
+                    aria-label={`切换到 ${place.name}`}
+                    style={{ ...inputButton, padding: '4px 10px', fontSize: 12.5 }}
+                  >
+                    切换
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!confirming) {
+                        setPendingDeleteId(place.id)
+                        return
+                      }
+                      setPendingDeleteId(null)
+                      savedCities.remove(place.id)
+                    }}
+                    onBlur={() => setPendingDeleteId((prev) => (prev === place.id ? null : prev))}
+                    aria-label={confirming ? `确认删除 ${place.name}` : `删除 ${place.name}`}
+                    style={{ ...inputButton, padding: '4px 10px', fontSize: 12.5, color: DANGER, borderColor: DANGER }}
+                  >
+                    {confirming ? '确认删除' : '删除'}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
 
       <Row label="温度单位">
         <div style={{ display: 'flex', gap: 14 }}>
@@ -296,13 +598,24 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
           min={REFRESH_RANGE.min}
           max={REFRESH_RANGE.max}
           step={REFRESH_RANGE.step}
-          value={effective.refreshMinutes}
-          onChange={(event) => set('refreshMinutes', Number(event.target.value))}
+          value={refreshInput}
+          onChange={(event) => setRefreshInput(Number(event.target.value))}
+          onPointerUp={commitRefresh}
+          onBlur={commitRefresh}
+          onKeyUp={commitRefresh}
           style={{ flex: 1, accentColor: ACCENT }}
         />
       </Row>
 
-      {notice !== null && <div style={{ color: DANGER, fontSize: 12.5, marginTop: 8 }}>{notice}</div>}
+      {notice !== null && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{ color: notice.kind === 'err' ? DANGER : OK, fontSize: 12.5, marginTop: 8 }}
+        >
+          {notice.text}
+        </div>
+      )}
       {snapshot.mode === 'memory' && (
         <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
           当前连接为进程内模式，配置仅在本次会话生效。
@@ -318,12 +631,14 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
             disabled={diagBusy}
             onClick={() => {
               if (diagBusy) return
+              const run = diagRunRef.current + 1
+              diagRunRef.current = run
               setDiag(null)
               setDiagBusy(true)
               void runLocationDiagnostics()
-                .then(setDiag)
-                .catch(() => setNotice('定位诊断失败，请稍后重试'))
-                .finally(() => setDiagBusy(false))
+                .then((result) => { if (diagRunRef.current === run) setDiag(result) })
+                .catch(() => { if (diagRunRef.current === run) notify('定位诊断失败，请稍后重试', 'err') })
+                .finally(() => { if (diagRunRef.current === run) setDiagBusy(false) })
             }}
             style={inputButton}
           >
