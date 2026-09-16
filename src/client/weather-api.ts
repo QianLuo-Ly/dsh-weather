@@ -24,6 +24,7 @@ import {
   HEAVY_RAIN_CODES,
   HEAVY_SNOW_CODES,
   RAIN_DANGER_MMH,
+  RAIN_WARN_MMH,
   SNOW_WARN_MMH,
   THUNDER_CODES,
   WIND_DANGER_KMH,
@@ -69,6 +70,12 @@ const CITY_ACCURACY_M = 10_000
  * re-route) — the plugin then adopts the new location automatically.
  */
 const AUTO_LOCATION_DRIFT_KM = 50
+/**
+ * How far a geocoding hit may sit from the coordinates it is naming before the
+ * original (English) name is kept instead. Generous enough for a city-level IP
+ * fix and its own city, tight enough to reject a same-name city abroad.
+ */
+const MAX_NAME_MATCH_KM = 150
 
 /** Map a browser-reported accuracy (m) to a precision tier. */
 function precisionFromAccuracy(accuracy?: number): LocationPrecision {
@@ -99,17 +106,27 @@ export interface CurrentWeather {
   visibility?: number
   /** Dew point temperature (°C). */
   dewPoint?: number
-  /** Current precipitation rate (mm/h). */
+  /**
+   * Current precipitation RATE (mm/h). The feed reports an accumulation over
+   * the preceding `current.interval` seconds (900 = 15 min on Open-Meteo), so
+   * it is normalized to an hourly rate on ingest — every consumer, including
+   * {@link severityOfCode}, reads this as mm/h.
+   */
   precipitation?: number
 }
 
 export interface HourlyPoint {
   /** ISO instant as returned by the API (local time with `timezone=auto`). */
   time: string
-  /** Temperature (°C). */
-  temperature: number
+  /**
+   * Temperature (°C), absent when the feed did not report that hour. Never
+   * defaulted to 0: a missing hour plotted as 0 °C is a fabricated reading
+   * (see the contract note on {@link DayHourlyPoint}).
+   */
+  temperature?: number
   weatherCode: number
-  precipProb: number
+  /** Precipitation probability (%), absent when the feed did not report it. */
+  precipProb?: number
   /** Whether the hour is daylight (derived from the feed's `is_day`). */
   isDay: boolean
   /** Sustained wind speed at this hour (km/h). */
@@ -120,11 +137,12 @@ export interface DailyPoint {
   /** ISO date (YYYY-MM-DD). */
   date: string
   weatherCode: number
-  /** Day-max temperature (°C). */
-  tempMax: number
-  /** Day-min temperature (°C). */
-  tempMin: number
-  precipProb: number
+  /** Day-max temperature (°C), absent when the feed did not report it. */
+  tempMax?: number
+  /** Day-min temperature (°C), absent when the feed did not report it. */
+  tempMin?: number
+  /** Max precipitation probability (%), absent when unreported. */
+  precipProb?: number
   /** Total precipitation for the day (mm). */
   precipSum?: number
 }
@@ -185,14 +203,6 @@ export interface RainScan {
  * stays metric even when the display unit is °F/mph, so thresholds and totals
  * are unit-independent); a step at/above {@link RAIN_MM_PER_15MIN} counts as
  * rain.
- */
-/**
- * Scan minutely precipitation steps for the next rain: is it raining now, and
- * if not, when does the first wet step start and how long does the wet spell
- * last. Steps are in mm per 15 minutes (the API's native unit — precipitation
- * stays metric even when the display unit is °F/mph, so thresholds and totals
- * are unit-independent); a step at/above {@link RAIN_MM_PER_15MIN} counts as
- * rain.
  *
  * @param steps - the 15-minute steps, the first being the one CONTAINING now.
  * @param elapsedInFirstStep - minutes already elapsed inside `steps[0]`. The
@@ -242,6 +252,16 @@ const IP_PROVIDER_TIMEOUT_MS = 6_000
 /** Air-quality feed budget — it is additive, so a dead feed must not delay
  * the forecast much beyond its own budget. */
 const AIR_TIMEOUT_MS = 5_000
+/**
+ * How long the forecast waits for the air feed before giving up on it for this
+ * refresh. The feed is additive (AQI/PM2.5 only), so a slow air endpoint must
+ * cost the weather at most this — not its full {@link AIR_TIMEOUT_MS}, which is
+ * what `await airPromise` used to do despite the comment claiming otherwise.
+ * The abandoned request settles on its own timeout and its result is dropped.
+ */
+const AIR_GRACE_MS = 1_200
+/** Fallback step length when the feed omits `current.interval` (Open-Meteo's is 900 s). */
+const PRECIP_INTERVAL_FALLBACK_S = 900
 /** Browser-fix budget when resolving or diagnosing a location. */
 const GPS_TIMEOUT_MS = 6_000
 /** Daily forecast horizon. Keeps the request param and the slice in sync. */
@@ -371,9 +391,14 @@ async function sampleIpLocation(url: string): Promise<GeoLocation | null> {
  * Resolve the current location by IP with a consensus vote across three
  * independent, browser-CORS-friendly providers. IP databases disagree wildly
  * for some networks (this machine's egress rotates across multiple IPs, and a
- * single provider mislabels them as Zhengzhou or Qingyuan), so the sample
- * closest to the most other samples (within 50 km) wins and its cluster is
- * averaged. geojs.io is deliberately excluded — it was consistently wrong here.
+ * single provider mislabels them as Zhengzhou or Qingyuan), so the sample with
+ * the most neighbours within {@link AUTO_LOCATION_DRIFT_KM} wins.
+ *
+ * The winner's OWN coordinates are returned, not the mean of its cluster: the
+ * radius is a whole 50 km, and averaging two samples that sit at opposite ends
+ * of it put the pin between the cities while the name still came from one of
+ * them — a location that matched neither. geojs.io is deliberately excluded —
+ * it was consistently wrong here.
  */
 async function resolveLocationByIp(): Promise<GeoLocation> {
   const samples = await Promise.all([
@@ -395,15 +420,9 @@ async function resolveLocationByIp(): Promise<GeoLocation> {
       bestCount = count
     }
   }
-  const cluster = ok.filter((other) =>
-    haversineKm(best.latitude, best.longitude, other.latitude, other.longitude) <= AUTO_LOCATION_DRIFT_KM,
-  )
-  const latitude = cluster.reduce((sum, sample) => sum + sample.latitude, 0) / cluster.length
-  const longitude = cluster.reduce((sum, sample) => sum + sample.longitude, 0) / cluster.length
-  // The cluster mean reintroduces sub-100 m digits even though each sample was
-  // already rounded, so round the result too — this value is what gets persisted.
-  const rounded = roundCoordinates(latitude, longitude)
-  return { name: best.name, latitude: rounded.latitude, longitude: rounded.longitude, source: 'ip' }
+  // Samples are rounded to ~100 m on ingest, so the winner can be used as-is and
+  // the value that gets persisted is exactly the one that was voted for.
+  return best
 }
 
 /**
@@ -535,6 +554,12 @@ function composeAddressName(address: ChineseAddress, includeDistrict = false): s
  * English name is searched and the hit nearest to the resolved coordinates is
  * used; the original name is kept when nothing matches. This is the fallback
  * path — the primary source is {@link reverseGeocodeAddress}.
+ *
+ * The nearest hit must also be genuinely near ({@link MAX_NAME_MATCH_KM}):
+ * same-name places exist all over the world, and without a cap the geocoder's
+ * best-ranked "Springfield" could rename a city on another continent. Distance
+ * is the great-circle one, not a squared-degree comparison, which would
+ * over-weight longitude at high latitudes.
  */
 async function localizeCityName(location: GeoLocation): Promise<string> {
   const trimmed = location.name.trim()
@@ -551,14 +576,13 @@ async function localizeCityName(location: GeoLocation): Promise<string> {
     let best = results[0]
     let bestDistance = Number.POSITIVE_INFINITY
     for (const candidate of results) {
-      const dLat = candidate.latitude - location.latitude
-      const dLon = candidate.longitude - location.longitude
-      const distance = dLat * dLat + dLon * dLon
+      const distance = haversineKm(location.latitude, location.longitude, candidate.latitude, candidate.longitude)
       if (distance < bestDistance) {
         bestDistance = distance
         best = candidate
       }
     }
+    if (!(bestDistance <= MAX_NAME_MATCH_KM)) return location.name
     return qualifyCityName(best.name, best.admin1, best.country_code)
   } catch {
     return location.name
@@ -738,9 +762,10 @@ export async function runLocationDiagnostics(): Promise<LocationDiagnostics> {
       resolve(result)
     })
   })
+  let ipLoc: GeoLocation | null = null
   let ip: LocationDiagnostics['ip']
   try {
-    const ipLoc = await ipPromise
+    ipLoc = await ipPromise
     ip = { status: 'ok', city: ipLoc.name, latitude: ipLoc.latitude, longitude: ipLoc.longitude }
   } catch (err) {
     ip = { status: 'error', error: err instanceof Error ? err.message : String(err) }
@@ -752,8 +777,8 @@ export async function runLocationDiagnostics(): Promise<LocationDiagnostics> {
     : gpsProbe.kind === 'error'
       ? { status: 'error', error: gpsProbe.error }
       : { status: 'timeout' }
-  const distance = gpsRaw !== null && ip.status === 'ok'
-    ? haversineKm(gpsRaw.latitude, gpsRaw.longitude, ip.latitude!, ip.longitude!)
+  const distance = gpsRaw !== null && ipLoc !== null
+    ? haversineKm(gpsRaw.latitude, gpsRaw.longitude, ipLoc.latitude, ipLoc.longitude)
     : undefined
   const precision = gpsRaw !== null ? precisionFromAccuracy(gpsRaw.accuracy) : 'unreliable'
   const chosen = precision !== 'unreliable' ? 'gps' : ip.status === 'ok' ? 'ip' : 'none'
@@ -840,6 +865,7 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
   const json = res.json as {
     current?: {
       time?: string
+      interval?: number
       temperature_2m?: number
       relative_humidity_2m?: number
       apparent_temperature?: number
@@ -883,7 +909,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
 
   if (json === null) throw new Error('天气服务暂未返回数据，请稍后重试')
   const current = json.current
-  if (current === undefined || current.temperature_2m === undefined) {
+  // `null` (a station that answered without a value) must fail here just like a
+  // missing field: it would otherwise flow into every comparison as 0 — a
+  // temperature of "0 °C", a phantom frost warning and 32 °F after conversion.
+  if (current === undefined
+    || typeof current.temperature_2m !== 'number'
+    || !Number.isFinite(current.temperature_2m)) {
     throw new Error('天气服务暂未返回当前数据，请稍后重试')
   }
   const hourly = json.hourly
@@ -909,6 +940,9 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
     const steps: MinutelyPoint[] = minuteTimes.slice(minuteFrom, minuteFrom + MINUTELY_STEPS)
       .map((time, index) => ({
         time,
+        // Unlike the forecast arrays below, a missing minutely step is DRY, not
+        // unknown: the rain scan needs one value per step, and a grid step the
+        // feed did not report is a step with no precipitation in it.
         precipitation: precipitation[minuteFrom + index] ?? 0,
       }))
     minutely = steps
@@ -930,11 +964,13 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
     rainSoon = scanRain(steps, elapsed)
   }
 
-  // Air quality is additive: parse it after the main JSON so the forecast is
-  // not held up; individual values stay absent (not 0) when unreported, and a
-  // feed that reports null for a station must not masquerade as 0/undefined.
+  // Air quality is additive: parse it after the main JSON, but under a short
+  // grace window rather than the feed's whole timeout, so a slow air endpoint
+  // cannot hold the forecast back. Individual values stay absent (not 0) when
+  // unreported, and a feed that reports null for a station must not masquerade
+  // as 0/undefined.
   let air: WeatherData['air']
-  const airRes = await airPromise
+  const airRes = await withTimeout(airPromise, AIR_GRACE_MS)
   if (airRes !== null && airRes.ok) {
     const airJson = airRes.json as { current?: { us_aqi?: number | null; pm2_5?: number | null } } | null
     const aqi = airJson?.current?.us_aqi ?? undefined
@@ -943,6 +979,18 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       air = { aqi, pm25 }
     }
   }
+
+  // `current.precipitation` is an accumulation over the preceding `interval`
+  // seconds (900 = 15 minutes), NOT an hourly rate: feeding it straight into the
+  // mm/h thresholds made 暴雨 four times harder to reach (20 mm/h of real rain
+  // reads as 5) while a moderate shower could trip the same rule. Convert once,
+  // here, so the field means mm/h for every consumer.
+  const precipIntervalS = typeof current.interval === 'number' && Number.isFinite(current.interval) && current.interval > 0
+    ? current.interval
+    : PRECIP_INTERVAL_FALLBACK_S
+  const precipRate = current.precipitation === null || current.precipitation === undefined
+    ? undefined
+    : (current.precipitation * 3600) / precipIntervalS
 
   return {
     location,
@@ -964,22 +1012,25 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
         ? undefined
         : current.visibility / 1000,
       dewPoint: current.dew_point_2m ?? undefined,
-      precipitation: current.precipitation ?? undefined,
+      precipitation: precipRate,
     },
+    // Missing values stay absent (`?? undefined`, never `?? 0`): the feed is
+    // allowed to omit a step, and a fabricated 0 plotted as "0 °C" or "降水 0%"
+    // is worse than an explicit gap the panels render as "—".
     hourly: (hourly?.time ?? []).slice(hourlyFrom, hourlyFrom + 24).map((time, index) => ({
       time,
-      temperature: hourly?.temperature_2m?.[hourlyFrom + index] ?? 0,
+      temperature: hourly?.temperature_2m?.[hourlyFrom + index] ?? undefined,
       weatherCode: hourly?.weather_code?.[hourlyFrom + index] ?? -1,
       isDay: (hourIsDay[hourlyFrom + index] ?? 1) === 1,
-      precipProb: hourly?.precipitation_probability?.[hourlyFrom + index] ?? 0,
+      precipProb: hourly?.precipitation_probability?.[hourlyFrom + index] ?? undefined,
       windSpeed: hourly?.wind_speed_10m?.[hourlyFrom + index] ?? undefined,
     })),
     daily: (daily?.time ?? []).slice(0, FORECAST_DAYS).map((date, index) => ({
       date,
       weatherCode: daily?.weather_code?.[index] ?? -1,
-      tempMax: daily?.temperature_2m_max?.[index] ?? 0,
-      tempMin: daily?.temperature_2m_min?.[index] ?? 0,
-      precipProb: daily?.precipitation_probability_max?.[index] ?? 0,
+      tempMax: daily?.temperature_2m_max?.[index] ?? undefined,
+      tempMin: daily?.temperature_2m_min?.[index] ?? undefined,
+      precipProb: daily?.precipitation_probability_max?.[index] ?? undefined,
       precipSum: daily?.precipitation_sum?.[index] ?? undefined,
     })),
     sunrise: daily?.sunrise?.[0],
@@ -1024,6 +1075,7 @@ const HAIL_CODES = new Set([96, 99])
  * a violent shower (82), which is exactly what 暴雨 means. A plain 95 (an
  * ordinary — usually brief — thunderstorm) or a plain 65 (大雨) is only a
  * warning unless the measured rate or gusts say otherwise.
+ * @param code
  * @param precipitation - precipitation rate at the same moment (mm/h), absent
  *   when the feed did not report it — the magnitude checks are then skipped
  *   rather than guessed at.
@@ -1041,7 +1093,7 @@ export function severityOfCode(code: number, precipitation?: number, gustKmh?: n
   if (gust !== undefined && gust >= GUST_DANGER_KMH) return 'danger'
   if (hazard) return 'danger'
   if (thunder) return 'warning'
-  if (heavyRain) return rate !== undefined && rate >= SNOW_WARN_MMH ? 'warning' : 'info'
+  if (heavyRain) return rate !== undefined && rate >= RAIN_WARN_MMH ? 'warning' : 'info'
   // Heavy snow: the code says 大雪/强阵雪, the rate says how much is landing —
   // with no rate reported, trust the code rather than dropping the warning.
   return rate === undefined || rate >= SNOW_WARN_MMH ? 'warning' : 'info'
@@ -1073,6 +1125,7 @@ export function severityOfCode(code: number, precipitation?: number, gustKmh?: n
  * Values are metric (°C / km/h); `fmt` renders temperatures and `windFmt`
  * renders wind speeds in the active display unit so the alert text never mixes
  * units with the rest of the UI.
+ * @param data
  * @param fmt - temperature formatter bound to the active display unit.
  * @param windFmt - wind-speed formatter bound to the active display unit
  *   (defaults to raw metric km/h for callers without a unit preference).
@@ -1163,8 +1216,13 @@ export function evaluateAlerts(
     for (const h of future) {
       if (severityOfCode(h.weatherCode) === 'danger') stormSoon = true
       if (HEAVY_SNOW_CODES.has(h.weatherCode)) snowSoon = true
-      heatMaxC = Math.max(heatMaxC, h.temperature)
-      coldMinC = Math.min(coldMinC, h.temperature)
+      // A missing hour must not enter the extremum: `Math.max(x, undefined)` is
+      // NaN, which would silently disable both the heat and the cold lead-time
+      // alert for the whole window.
+      if (h.temperature !== undefined) {
+        heatMaxC = Math.max(heatMaxC, h.temperature)
+        coldMinC = Math.min(coldMinC, h.temperature)
+      }
       if (h.windSpeed !== undefined) maxWindKmh = Math.max(maxWindKmh ?? h.windSpeed, h.windSpeed)
     }
     // Mild thunder in the window is left to the hourly strip alone: announcing

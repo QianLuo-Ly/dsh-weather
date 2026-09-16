@@ -53,6 +53,20 @@ const STYLE_TEXT = [
   '  background: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.16));',
   '  border-radius: 4px;',
   '}',
+  // Keyboard focus was invisible on every control this plugin renders. Outline
+  // in `currentColor` so it follows whatever palette (light/dark, high
+  // contrast) the host applies, instead of pinning one accent color.
+  '.dshw-bar:focus-visible, .dshw-root button:focus-visible, .dshw-popover a:focus-visible,',
+  '.dshw-ac-row:focus-visible, .dshw-ac-star:focus-visible {',
+  '  outline: 2px solid currentColor;',
+  '  outline-offset: 2px;',
+  '}',
+  // The entrance animation and the hover transitions are decoration, not
+  // feedback, so they are dropped entirely for reduced-motion users.
+  '@media (prefers-reduced-motion: reduce) {',
+  '  .dshw-popover, .dshw-ac-panel { animation: none; }',
+  '  .dshw-bar, .dshw-ac-row, .dshw-ac-star { transition: none; }',
+  '}',
 ].join('\n')
 
 /**

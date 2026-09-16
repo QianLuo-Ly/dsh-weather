@@ -26,7 +26,10 @@ export interface ConditionInfo {
  */
 export const CLEAR_CODES = new Set([0, 1])
 export const RAIN_CODES = new Set([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82])
-export const THUNDER_CODES = new Set([95, 96])
+// 99 (thunderstorm with heavy hail) belongs here: it IS a thunderstorm, and
+// without it the hail code fell through `weatherAdvice`'s precipitation branch
+// to "天气平稳，适合日常出行" — a hail storm announced as a calm day.
+export const THUNDER_CODES = new Set([95, 96, 99])
 export const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86])
 export const HEAVY_RAIN_CODES = new Set([65, 82, 99])
 export const HEAVY_SNOW_CODES = new Set([75, 86])
@@ -57,6 +60,14 @@ export const GUST_WARN_KMH = 89
 export const GUST_DANGER_KMH = 118
 /** 暴雨 rate (China's 24 h red line compressed to an hourly rate). */
 export const RAIN_DANGER_MMH = 20
+/**
+ * Rain rate that upgrades a heavy-rain code from `info` to a warning. Same
+ * number as {@link SNOW_WARN_MMH} today, deliberately a separate constant: it
+ * measures millimetres of rain per hour, not the water equivalent of snow, and
+ * tuning one must not silently retune the other (the rain branch used to read
+ * the snow constant).
+ */
+export const RAIN_WARN_MMH = 2
 /** Snowfall is reported in water equivalent: ~2 mm/h ≈ 2 cm of fresh snow. */
 export const SNOW_WARN_MMH = 2
 export const WIND_ADVICE_KMH = 40
@@ -104,6 +115,19 @@ export function describeCondition(code: number, isDay: boolean): ConditionInfo {
   const table = isDay ? DAY : NIGHT
   return table[code] ?? { label: '未知', emoji: '🌡️' }
 }
+
+/**
+ * Every emoji {@link describeCondition} can return, for consumers that must
+ * recognize a title THIS plugin wrote (hooks.ts builds its prefix pattern from
+ * this list). Derived from both tables instead of hand-listed: the old literal
+ * set silently missed ⛄ / 🧊 / 🌩️, and a glyph added to a table above must not
+ * be able to leave the title logic behind again.
+ */
+export const CONDITION_EMOJIS: string[] = [...new Set([
+  ...Object.values(DAY).map((entry) => entry.emoji),
+  ...Object.values(NIGHT).map((entry) => entry.emoji),
+  '🌡️',
+])]
 
 /** Short hour label like `14时` / `08时`, honoring the API's local time. */
 export function hourLabel(iso: string): string {

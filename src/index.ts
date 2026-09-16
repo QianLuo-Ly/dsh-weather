@@ -75,9 +75,9 @@ export const WeatherConfigSchema = z.object({
   autoSource: z.union([z.const('gps'), z.const('ip')]).required(false),
 })
 
-/** Defaults for callers that want a fresh config object. */
-export function defaultConfig(): WeatherConfig {
-  return { ...DEFAULT_WEATHER_CONFIG }
+/** Error → one-line text for the log. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /**
@@ -114,11 +114,14 @@ export function apply(ctx: Context, config: WeatherConfig): void {
     if (typeof provider?.installSection === 'function') {
       try {
         provider.installSection(ctx, WEATHER_NS, WeatherConfigSchema, config, hooks)
-      } catch {
+      } catch (error) {
         // The provider resolves the stored section while registering and rethrows
         // a failure. Letting that escape kills the inject fiber (and with it the
         // plugin), so contain it: the namespace stays unavailable, but the rest of
         // the plugin still loads and the settings page reports read-only.
+        // Logged, not swallowed — read-only settings with an empty log is
+        // undiagnosable from the outside.
+        ctx.logger?.warn?.('dsh-weather: 天气设置命名空间注册失败，本次以只读模式运行：%s', errorText(error))
       }
       return
     }
@@ -135,10 +138,13 @@ export function apply(ctx: Context, config: WeatherConfig): void {
         }
         legacy(ctx, WEATHER_NS, WeatherConfigSchema, config, hooks)
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         // Neither shape exists on this Host: the plugin still loads, the
         // settings namespace is simply unavailable (the client half then falls
         // back to its in-memory defaults and the settings page reports read-only).
+        // Diagnosis matters here: this is the path taken when the Host is older
+        // (or newer) than either registrar this plugin knows.
+        ctx.logger?.warn?.('dsh-weather: 该 Host 无可用的设置注册接口，设置页为只读：%s', errorText(error))
       })
   })
 }

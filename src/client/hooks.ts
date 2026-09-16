@@ -1,8 +1,13 @@
 /**
  * Weather behaviour hooks — the data & side-effect layer that used to live
  * inline in WeatherBar. Splitting it out keeps the component down to layout +
- * interaction, and lets each concern (location, feed, saved cities, brief,
+ * interaction, and lets each concern (location, feed, saved cities, severe
  * notifications, tab title, day detail) be reasoned about in isolation.
+ *
+ * Two concerns have since moved to their own modules, because each owns a whole
+ * mechanism the rest of this file does not touch: the daily brief's localStorage
+ * dedupe + minute tick (`hooks-brief`) and the payload/location agreement checks
+ * shared by both notification paths (`location-match`).
  *
  * All hooks are consumer-agnostic: they take the sanitized config section and
  * a `SettingsScope`, and return plain state + actions. Display units are NOT
@@ -30,7 +35,8 @@ import {
   type GeoLocation,
   type WeatherData,
 } from './weather-api'
-import { describeCondition, rainOnsetRounded } from './condition'
+import { CONDITION_EMOJIS, describeCondition, rainOnsetRounded } from './condition'
+import { payloadMatchesLocation } from './location-match'
 import { tempText, windText } from './units'
 
 /** How long to wait (ms) before re-checking IP drift after a location persist —
@@ -39,16 +45,24 @@ import { tempText, windText } from './units'
 const DRIFT_PROBE_MIN_GAP_MS = 60_000
 /** How often the open page re-checks IP drift (network moves mid-session). */
 const DRIFT_PROBE_INTERVAL_MS = 60 * 60_000
+/** Upper bound on the in-memory notification dedupe map. */
+const NOTIFY_DEDUPE_MAX = 24
 
 /**
  * Matches the weather prefix this plugin writes into the tab title:
- * `<condition emoji> <temp> <name> — `, plus the legacy fixed-⛅ form used by
- * older bundles. Used only to strip our own prefix when capturing the app's
- * base title. The optional sign matters: below 0 °C `tempText` yields `-5°C`,
- * and a prefix we fail to recognise is adopted as the new base — so the title
- * would grow a fresh copy of itself on every write.
+ * `<condition emoji> <label> <temp> <name> — `. Used only to strip our own
+ * prefix when capturing the app's base title — a prefix we fail to recognise is
+ * adopted as the new base, so the title grows a fresh copy of itself on every
+ * write.
+ *
+ * Both halves are load-bearing and both were wrong: the emoji list is now
+ * derived from `condition.ts` (the hand-written one silently missed ⛄ / 🧊 /
+ * 🌩️), and the label segment is REQUIRED (`\S+`) because the writer emits
+ * `${emoji} ${label} ${temp}` — the old pattern demanded the temperature
+ * directly after the emoji, so it matched no title this version can produce.
+ * The optional sign matters too: below 0 °C `tempText` yields `-5°C`.
  */
-const TITLE_PREFIX_RE = /^(☀️|🌤️|⛅|☁️|🌧️|❄️|🌨️|⛈️|🌙|🌡️|🌫️|🌦️) -?\d+°[CF] .+? — /
+const TITLE_PREFIX_RE = new RegExp(`^(?:${CONDITION_EMOJIS.join('|')}) \\S+ -?\\d+°[CF] .+? — `)
 
 /** Manual-mode display name reduced to city level (`广东省广州市番禺区` → `广东省广州市`). */
 function manualDisplayName(cityName: string | undefined): string {
@@ -77,12 +91,6 @@ function newSavedId(): string {
 /** Stable empty list: keeps the "config caught up" effect from firing every
  * render while the settings namespace has not resolved yet. */
 const EMPTY_SAVED: SavedLocation[] = []
-
-/** `YYYY-MM-DD` for a Date (local) — keys the once-per-day brief dedupe. */
-function dayKey(date: Date): string {
-  const pad = (n: number): string => String(n).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
-}
 
 // ── Location ────────────────────────────────────────────────────────────────
 
@@ -297,6 +305,12 @@ export function useAutoLocation(options: {
       source: 'ip' as const,
     }
     const probe = (): void => {
+      // A hidden tab must not re-resolve (three IP providers + GPS + reverse
+      // geocode): nobody is looking at the result, and mobile browsers keep
+      // background tabs alive for hours. The shared gate is honored here too, so
+      // switching tabs back and forth cannot turn foregrounding into a probe
+      // storm.
+      if (document.hidden || Date.now() - lastDriftProbeRef.current < DRIFT_PROBE_MIN_GAP_MS) return
       // Arm the shared gate so an adoption here (which persists + re-runs the
       // location effect) cannot trigger an immediate second probe there.
       lastDriftProbeRef.current = Date.now()
@@ -307,9 +321,14 @@ export function useAutoLocation(options: {
       })
     }
     const id = window.setInterval(probe, DRIFT_PROBE_INTERVAL_MS)
+    const onVisibility = (): void => {
+      if (!document.hidden) probe()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
     return () => {
       cancelled = true
       window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
   }, [
     effective.enabled,
@@ -416,10 +435,22 @@ export function useWeatherFeed(options: {
   }, [effective.enabled, location, tick])
 
   // Auto-refresh on the configured interval (sanitized, so it is always ≥ 5).
+  // A hidden tab does not refresh: nothing renders the new value, and an open
+  // background tab otherwise keeps polling the network for hours. Coming back
+  // to the foreground refreshes at once instead of waiting out the interval.
   useEffect(() => {
     if (!effective.enabled) return
-    const id = window.setInterval(() => setTick((n) => n + 1), Math.max(REFRESH_RANGE.min, effective.refreshMinutes) * 60_000)
-    return () => window.clearInterval(id)
+    const id = window.setInterval(() => {
+      if (!document.hidden) setTick((n) => n + 1)
+    }, Math.max(REFRESH_RANGE.min, effective.refreshMinutes) * 60_000)
+    const onVisibility = (): void => {
+      if (!document.hidden) setTick((n) => n + 1)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.clearInterval(id)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [effective.refreshMinutes, effective.enabled])
 
   const refresh = useCallback((): void => setTick((n) => n + 1), [])
@@ -737,22 +768,6 @@ export function useSavedLocations(options: {
 // ── Notifications: severe weather ────────────────────────────────────────────
 
 /**
- * Whether a fetched payload belongs to the location currently displayed.
- *
- * `fetchWeather` stores the very `GeoLocation` object it was given, so identity
- * is the honest test — and it is deliberately stricter than comparing
- * coordinates, which would treat two distinct resolutions of the same place as
- * interchangeable. Consumers that re-run on a NAME or config change (a city
- * switch updates `placeName` one commit before the new payload arrives) must use
- * this, or they act on the previous city's weather: a notification titled with
- * the new city carrying the old city's conditions, and a dedupe key that then
- * suppresses the real alert.
- */
-function payloadMatchesLocation(data: WeatherData | null, location: GeoLocation | null): boolean {
-  return data !== null && location !== null && data.location === location
-}
-
-/**
  * Fire a browser notification when a severe-weather alert appears, at most once
  * per alert combination per hour (4 h for lead-time `*-soon` alerts), plus the
  * rain-soon reminder. Requires notification permission.
@@ -799,184 +814,30 @@ export function useWeatherNotifications(options: {
     const dedupeMs = key.includes('-soon') ? 4 * 60 * 60_000 : 60 * 60_000
     const last = notifiedAt.current.get(key)
     if (last !== undefined && now - last < dedupeMs) return
-    // Bound the dedupe map (worst case: one entry per alert combo per hour).
-    if (notifiedAt.current.size > 24) notifiedAt.current.clear()
-    notifiedAt.current.set(key, now)
     try {
       new Notification(`⚠ ${placeName} 天气提醒`, {
         body: alerts.map((alert) => `${alert.title}：${alert.detail}`).join('；'),
         tag: `dsh-weather-${key}`,
       })
     } catch {
-      // notification construction can throw in restricted contexts — ignore
+      // Notification construction can throw in restricted contexts — return
+      // WITHOUT recording, so the alert is retried on the next data change
+      // instead of being suppressed for the whole dedupe window by a notice the
+      // user never saw.
+      return
     }
+    // Bookkeeping happens only after a notice was actually shown. Bound the map
+    // by evicting the oldest key (insertion order): clearing it wholesale made
+    // every combination eligible again mid-storm, which is exactly when a
+    // re-notification storm is least welcome.
+    if (notifiedAt.current.size >= NOTIFY_DEDUPE_MAX) {
+      const oldest = notifiedAt.current.keys().next().value
+      if (oldest !== undefined) notifiedAt.current.delete(oldest)
+    }
+    notifiedAt.current.set(key, now)
   }, [data, location, effective.alertsEnabled, effective.units, placeName, stale])
 }
 
-// ── Notifications: daily brief ──────────────────────────────────────────────
-
-/** localStorage key prefix for the once-per-slot brief dedupe. */
-const BRIEF_KEY_PREFIX = 'dsh-weather-brief-'
-/** How old a brief dedupe key may get before it is pruned. */
-const BRIEF_KEY_RETENTION_DAYS = 3
-/**
- * Catch-up window (minutes after the target time). A slot may still fire when a
- * throttled background tab or system sleep pushed the wake-up past its target —
- * but never hours later: simply opening the page at night must not push the
- * morning brief (and must not fire morning + evening together).
- */
-const BRIEF_GRACE_MINUTES = 120
-
-/** Once-per-day-slot dedupe survives reloads where localStorage is available. */
-function briefAlreadySent(storageKey: string): boolean {
-  try {
-    return window.localStorage.getItem(storageKey) !== null
-  } catch {
-    return false
-  }
-}
-
-function markBriefSent(storageKey: string): void {
-  try {
-    window.localStorage.setItem(storageKey, '1')
-  } catch {
-    // storage disabled — the in-session ref still prevents duplicates
-  }
-}
-
-/** Drop dedupe keys older than the retention window (they would otherwise
- * accumulate two per day forever). */
-function pruneBriefKeys(todayKey: string): void {
-  try {
-    const cutoff = new Date(`${todayKey}T00:00:00`)
-    cutoff.setDate(cutoff.getDate() - BRIEF_KEY_RETENTION_DAYS)
-    const stale: string[] = []
-    for (let i = 0; i < window.localStorage.length; i += 1) {
-      const key = window.localStorage.key(i)
-      if (key === null || !key.startsWith(BRIEF_KEY_PREFIX)) continue
-      const stamp = key.slice(BRIEF_KEY_PREFIX.length, BRIEF_KEY_PREFIX.length + 10)
-      const parsed = new Date(`${stamp}T00:00:00`)
-      if (!Number.isNaN(parsed.getTime()) && parsed < cutoff) stale.push(key)
-    }
-    for (const key of stale) window.localStorage.removeItem(key)
-  } catch {
-    // storage unavailable — nothing to prune
-  }
-}
-
-/** Minutes since local midnight for an `HH:MM` string, or undefined when invalid. */
-function clockMinutes(clock: string): number | undefined {
-  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(clock)
-  if (match === null) return undefined
-  return Number(match[1]) * 60 + Number(match[2])
-}
-
-/**
- * Push a morning brief (today's outlook) and an evening brief (tomorrow's) at
- * the configured times, at most once per slot per day. A slot only fires within
- * {@link BRIEF_GRACE_MINUTES} of its target (so enabling the feature or editing
- * the time at 22:00 cannot push a stale "今日天气"), the payload must be fresh
- * (a stale snapshot is skipped), and the dedupe mark is written only after the
- * notification was actually constructed — a failed construction is retried on
- * the next tick instead of burning the day's slot.
- *
- * Times are interpreted in the DEVICE's timezone (the brief is "your morning",
- * not the city's); multi-tab double-sends are collapsed by the shared storage
- * key and the identical notification `tag`.
- */
-export function useDailyBrief(options: {
-  effective: WeatherConfig
-  data: WeatherData | null
-  location: GeoLocation | null
-  placeName: string
-  /** True when `data` is a stale snapshot (last refresh failed). */
-  stale: boolean
-}): void {
-  const { effective, data, location, placeName, stale } = options
-  const sentRef = useRef(new Set<string>())
-  // Latest payload/staleness read by the minute tick without restarting it on
-  // every refresh (restarting made each auto-refresh run an immediate check).
-  const dataRef = useRef(data)
-  dataRef.current = data
-  const staleRef = useRef(stale)
-  staleRef.current = stale
-  const locationRef = useRef(location)
-  locationRef.current = location
-
-  useEffect(() => {
-    if (!effective.enabled || !effective.briefEnabled) return
-
-    const build = (slot: 'morning' | 'evening'): { title: string; body: string } | null => {
-      const current = dataRef.current
-      if (current === null) return null
-      // The brief names `placeName` but reads this payload: they must be the same
-      // city, or a switch inside the catch-up window burns the day's slot with
-      // the previous city's weather (and the localStorage mark then suppresses
-      // the correct brief).
-      if (!payloadMatchesLocation(current, locationRef.current)) return null
-      const day = slot === 'morning' ? current.daily[0] : current.daily[1]
-      if (day === undefined) return null
-      const condition = describeCondition(day.weatherCode, true)
-      const range = `${tempText(day.tempMin, effective.units)} ~ ${tempText(day.tempMax, effective.units)}`
-      const rain = day.precipProb > 0 ? ` · 降水 ${day.precipProb}%` : ''
-      return {
-        title: `${slot === 'morning' ? '☀️ 今日天气' : '🌙 明日天气'} · ${placeName}`,
-        body: `${condition.emoji} ${condition.label} ${range}${rain}`,
-      }
-    }
-
-    const check = (): void => {
-      const now = new Date()
-      if (staleRef.current) return
-      // The permission is re-read on every tick, not only when the effect mounts.
-      // The gate used to sit above the timer, so granting permission while the
-      // brief was being enabled (the common first-run path: the write lands while
-      // the permission dialog is still open) left the effect armed with
-      // 'default' and no timer at all — the brief stayed silent until a reload.
-      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
-      const nowMinutes = now.getHours() * 60 + now.getMinutes()
-      for (const slot of ['morning', 'evening'] as const) {
-        const wanted = slot === 'morning' ? effective.briefMorning : effective.briefEvening
-        const target = clockMinutes(wanted)
-        if (target === undefined) continue
-        const delta = nowMinutes - target
-        // Only within the catch-up window: never fire hours late.
-        if (delta < 0 || delta > BRIEF_GRACE_MINUTES) continue
-        const storageKey = `${BRIEF_KEY_PREFIX}${dayKey(now)}-${slot}`
-        if (sentRef.current.has(storageKey) || briefAlreadySent(storageKey)) continue
-        const payload = build(slot)
-        if (payload === null) continue
-        try {
-          new Notification(payload.title, { body: payload.body, tag: storageKey })
-        } catch {
-          // Construction can throw in restricted contexts — keep the slot open
-          // and retry on the next tick instead of marking it as sent.
-          continue
-        }
-        sentRef.current.add(storageKey)
-        markBriefSent(storageKey)
-      }
-      pruneBriefKeys(dayKey(now))
-    }
-
-    // Minute-aligned tick keeps the check cheap; correctness comes from the
-    // window comparison above, not from the tick landing exactly.
-    let timer = 0
-    const loop = (): void => {
-      check()
-      timer = window.setTimeout(loop, 60_000 - (Date.now() % 60_000) + 20)
-    }
-    loop()
-    return () => window.clearTimeout(timer)
-  }, [
-    effective.enabled,
-    effective.briefEnabled,
-    effective.briefMorning,
-    effective.briefEvening,
-    effective.units,
-    placeName,
-  ])
-}
 
 // ── Tab title ───────────────────────────────────────────────────────────────
 
@@ -995,7 +856,8 @@ export function useDailyBrief(options: {
 export function useTabTitle(options: {
   effective: WeatherConfig
   data: WeatherData | null
-  status: string
+  /** Chip status as the bar computes it (`locating` included). */
+  status: 'loading' | 'ready' | 'error' | 'locating'
   placeName: string
 }): void {
   const { effective, data, status, placeName } = options

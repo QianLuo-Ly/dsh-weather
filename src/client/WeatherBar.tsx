@@ -39,13 +39,13 @@ import {
   placeNameOf,
   useAutoLocation,
   useConfigWriter,
-  useDailyBrief,
   useDayDetail,
   useSavedLocations,
   useTabTitle,
   useWeatherFeed,
   useWeatherNotifications,
 } from './hooks'
+import { useDailyBrief } from './hooks-brief'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
 import { DailyList, DayDetailPanel, HourlyStrip, RainStrip, StatChip, TodayFacts, type TodayFactItem } from './panels'
 import { TrendChart } from './TrendChart'
@@ -223,12 +223,19 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   )
   const advice = useMemo(() => (data === null ? null : weatherAdvice(data)), [data])
   // The feed is metric, the chart plots what it is given and only labels it with
-  // `unitSuffix` — so convert here, or a °F axis would print °C numbers.
-  const trendValues = useMemo(
-    () => data?.hourly.map((point) => tempNumber(point.temperature, units)) ?? [],
-    [data, units],
-  )
-  const trendLabels = useMemo(() => data?.hourly.map((point) => hourLabel(point.time)) ?? [], [data])
+  // `unitSuffix` — so convert here, or a °F axis would print °C numbers. Hours
+  // the feed omitted are dropped from values AND labels together (they stay
+  // index-aligned), instead of being plotted as a fabricated 0 °C.
+  const trend = useMemo(() => {
+    const values: number[] = []
+    const labels: string[] = []
+    for (const point of data?.hourly ?? []) {
+      if (point.temperature === undefined) continue
+      values.push(tempNumber(point.temperature, units))
+      labels.push(hourLabel(point.time))
+    }
+    return { values, labels }
+  }, [data, units])
 
   if (!effective.enabled) return null
 
@@ -282,6 +289,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const cloudTextValue = cur?.cloudCover !== undefined ? `${Math.round(cur.cloudCover)}%` : undefined
   const rainTotal = data?.daily[0]?.precipSum
   const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05 ? `${rainTotal.toFixed(1)} mm` : undefined
+  // Unreported probability reads as "--", not as a confident 0 %.
+  const todayPrecipProb = data?.daily[0]?.precipProb
 
   // "今日信息" wrap-row entries, assembled conditionally so only fields the
   // feed actually returned are shown.
@@ -374,7 +383,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
           {/* Saved-city / drift feedback while the popover is open (the floating
               toast is hidden then, so it would otherwise be swallowed). */}
           {toast !== null && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 12.5, color: TOKEN.fg, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.accent}`, borderRadius: 10, padding: '6px 10px' }}>
+            <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 12.5, color: TOKEN.fg, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.accent}`, borderRadius: 10, padding: '6px 10px' }}>
               📍 <span>{toast}</span>
             </div>
           )}
@@ -521,7 +530,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                         value={windDisplayValue !== undefined ? `${Math.round(windDisplayValue)}` : '--'}
                         suffix={windDisplayValue !== undefined ? windSuffixLabel : undefined}
                       />
-                      <StatChip icon={<Glyph name="umbrella" size={13} />} label="今日降水" value={data.daily[0] !== undefined ? `${data.daily[0].precipProb}%` : '--'} />
+                      <StatChip icon={<Glyph name="umbrella" size={13} />} label="今日降水" value={todayPrecipProb !== undefined ? `${todayPrecipProb}%` : '--'} />
                       <StatChip
                         icon={<Glyph name="wind" size={13} />}
                         label="空气"
@@ -558,8 +567,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                   <div data-block="trend" style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 4 }}>未来 24 小时温度</div>
                     <TrendChart
-                      values={trendValues}
-                      labels={trendLabels}
+                      values={trend.values}
+                      labels={trend.labels}
                       unit={unitSuffix}
                       height={56}
                     />
@@ -619,9 +628,13 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
       )}
 
       {/* Under-chip toast: IP-drift city switches and saved-city feedback.
-          Hidden while the popover is open so they do not overlap. */}
+          Hidden while the popover is open so they do not overlap. Announced as
+          a status region: "已切换到 X" / "切换失败" is otherwise silent for a
+          screen reader. */}
       {toast !== null && !open && (
         <div
+          role="status"
+          aria-live="polite"
           style={{
             position: 'absolute',
             top: 'calc(100% + 8px)',

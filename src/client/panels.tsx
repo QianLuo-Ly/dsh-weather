@@ -97,7 +97,13 @@ export function RainStrip(props: { points: MinutelyPoint[] }): ReactElement {
   const { points } = props
   const maxValue = Math.max(...points.map((point) => point.precipitation), 0.5)
   return (
-    <div style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}>
+    // One summary for assistive tech instead of 24 colour-only bars: the bars
+    // themselves carry their value in a `title` (mouse-only) and are decorative.
+    <div
+      role="img"
+      aria-label={`未来 ${points.length * 15 / 60} 小时降水，最大 ${maxValue.toFixed(1)} 毫米/15 分钟`}
+      style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}
+    >
       {points.map((point, index) => {
         const value = point.precipitation
         const wet = value >= RAIN_MM_PER_15MIN
@@ -108,6 +114,7 @@ export function RainStrip(props: { points: MinutelyPoint[] }): ReactElement {
         return (
           <div key={point.time} style={{ flex: '1 1 0', minWidth: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
             <div
+              aria-hidden="true"
               title={`${timeLabel(point.time)} ${value.toFixed(1)} mm`}
               style={{ width: '100%', maxWidth: 14, height, borderRadius: 3, background: color, transition: 'height 0.2s ease' }}
             />
@@ -138,8 +145,13 @@ export function HourlyStrip(props: {
             <div style={{ margin: '2px 0' }}>
               <WeatherIcon code={point.weatherCode} isDay={point.isDay} size={18} />
             </div>
-            <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>{fmt(point.temperature)}</div>
-            <div style={{ fontSize: 10, color: point.precipProb > 0 ? TOKEN.accent : 'transparent', ...NUM }}>{point.precipProb}%</div>
+            {/* A step the feed did not report renders as "—", never as 0 °C. */}
+            <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>
+              {point.temperature !== undefined ? fmt(point.temperature) : '—'}
+            </div>
+            <div style={{ fontSize: 10, color: point.precipProb !== undefined && point.precipProb > 0 ? TOKEN.accent : 'transparent', ...NUM }}>
+              {point.precipProb !== undefined ? `${point.precipProb}%` : ''}
+            </div>
           </div>
         ))}
       </div>
@@ -161,16 +173,31 @@ export function DailyList(props: {
   onSelectDay?: (date: string) => void
 }): ReactElement {
   const { title, points, fmt, onSelectDay } = props
-  const weekMin = points.length > 0 ? Math.min(...points.map((d) => d.tempMin)) : 0
-  const weekMax = points.length > 0 ? Math.max(...points.map((d) => d.tempMax)) : 1
+  // The range bars are scaled over the week's REPORTED extremes. Days the feed
+  // omitted are skipped rather than counted as 0 °C — that would stretch the
+  // scale down to freezing and squash every real bar into a sliver.
+  const reportedMin: number[] = []
+  const reportedMax: number[] = []
+  for (const day of points) {
+    if (day.tempMin === undefined || day.tempMax === undefined) continue
+    reportedMin.push(day.tempMin)
+    reportedMax.push(day.tempMax)
+  }
+  const weekMin = reportedMin.length > 0 ? Math.min(...reportedMin) : 0
+  const weekMax = reportedMax.length > 0 ? Math.max(...reportedMax) : 1
   const weekSpan = weekMax - weekMin || 1
   return (
     <div data-block="daily" style={{ marginTop: 10 }}>
       <div style={{ fontSize: 12, color: TOKEN.fgMuted, marginBottom: 6 }}>{title}</div>
       <div>
         {points.map((point, index) => {
-          const left = ((point.tempMin - weekMin) / weekSpan) * 100
-          const width = Math.max(8, ((point.tempMax - point.tempMin) / weekSpan) * 100)
+          const tempMin = point.tempMin
+          const tempMax = point.tempMax
+          const hasRange = tempMin !== undefined && tempMax !== undefined
+          const left = tempMin !== undefined && tempMax !== undefined ? ((tempMin - weekMin) / weekSpan) * 100 : 0
+          const width = tempMin !== undefined && tempMax !== undefined
+            ? Math.max(8, ((tempMax - tempMin) / weekSpan) * 100)
+            : 0
           // Shared row metrics, so the clickable (button) and inert (div) rows
           // stay pixel-identical — a button only adds the UA resets below.
           const row: CSSProperties = {
@@ -187,24 +214,30 @@ export function DailyList(props: {
               <span style={{ width: 20, textAlign: 'center', flex: '0 0 auto' }}>
                 <WeatherIcon code={point.weatherCode} isDay={true} size={18} />
               </span>
-              <span style={{ width: 36, flex: '0 0 auto', textAlign: 'right', fontSize: 11, color: point.precipProb > 0 ? TOKEN.accent : TOKEN.fgMuted, ...NUM }}>
-                {point.precipProb}%
+              <span style={{ width: 36, flex: '0 0 auto', textAlign: 'right', fontSize: 11, color: point.precipProb !== undefined && point.precipProb > 0 ? TOKEN.accent : TOKEN.fgMuted, ...NUM }}>
+                {point.precipProb !== undefined ? `${point.precipProb}%` : '—'}
               </span>
-              <span style={{ width: 36, flex: '0 0 auto', textAlign: 'right', color: TOKEN.fgMuted, ...NUM }}>{fmt(point.tempMin)}</span>
+              <span style={{ width: 36, flex: '0 0 auto', textAlign: 'right', color: TOKEN.fgMuted, ...NUM }}>
+                {tempMin !== undefined ? fmt(tempMin) : '—'}
+              </span>
               <span style={{ position: 'relative', flex: 1, height: 4, borderRadius: 2, background: TOKEN.bgSoft, overflow: 'hidden' }}>
-                <span
-                  style={{
-                    position: 'absolute',
-                    left: `${left}%`,
-                    width: `${width}%`,
-                    top: 0,
-                    bottom: 0,
-                    borderRadius: 3,
-                    background: `linear-gradient(90deg, ${TOKEN.accent}, ${PALETTE.sun})`,
-                  }}
-                />
+                {hasRange && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      left: `${left}%`,
+                      width: `${width}%`,
+                      top: 0,
+                      bottom: 0,
+                      borderRadius: 3,
+                      background: `linear-gradient(90deg, ${TOKEN.accent}, ${PALETTE.sun})`,
+                    }}
+                  />
+                )}
               </span>
-              <span style={{ width: 38, flex: '0 0 auto', textAlign: 'right', fontWeight: 600, ...NUM }}>{fmt(point.tempMax)}</span>
+              <span style={{ width: 38, flex: '0 0 auto', textAlign: 'right', fontWeight: 600, ...NUM }}>
+                {tempMax !== undefined ? fmt(tempMax) : '—'}
+              </span>
             </>
           )
           if (onSelectDay === undefined) {

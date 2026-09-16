@@ -9,8 +9,18 @@
  *   artifact (see the banner/footer comments below).
  */
 import { build } from 'esbuild'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 export const ID = 'dsh-weather'
+
+/**
+ * Repository root, resolved from THIS file rather than from `process.cwd()`:
+ * esbuild reads `entryPoints` relative to the working directory, so running the
+ * build from anywhere but the repo root silently produced an empty/hollow
+ * bundle (or, with build.mjs's `rmSync('lib')`, deleted the wrong directory).
+ */
+export const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** Module-table specifiers every client bundle may require without an inject edge. */
 export const PLATFORM_MODULES = [
@@ -27,11 +37,12 @@ export const INJECT_EDGES = [
   '@deepseek-ai/dsh-client-ui-settings',
 ]
 
-/** Build both halves into `outDir` (created if missing). */
+/** Build both halves into `outDir` (created if missing, resolved against {@link ROOT}). */
 export async function buildLib(outDir) {
+  const outDirAbsolute = path.isAbsolute(outDir) ? outDir : path.join(ROOT, outDir)
   await build({
-    entryPoints: ['src/index.ts'],
-    outfile: `${outDir}/index.js`,
+    entryPoints: [path.join(ROOT, 'src/index.ts')],
+    outfile: path.join(outDirAbsolute, 'index.js'),
     bundle: true,
     format: 'esm',
     platform: 'node',
@@ -43,8 +54,8 @@ export async function buildLib(outDir) {
   })
 
   await build({
-    entryPoints: ['src/client/index.tsx'],
-    outfile: `${outDir}/client.js`,
+    entryPoints: [path.join(ROOT, 'src/client/index.tsx')],
+    outfile: path.join(outDirAbsolute, 'client.js'),
     bundle: true,
     format: 'cjs',
     platform: 'browser',

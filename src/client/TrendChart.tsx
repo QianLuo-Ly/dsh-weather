@@ -59,8 +59,19 @@ export function TrendChart(props: TrendChartProps): ReactElement {
   const maxPoint = points[values.indexOf(max)]
   const minPoint = points[values.indexOf(min)]
 
+  // The chart was `aria-hidden`, which left the whole 24 h trend unreachable:
+  // give it an image role with the two numbers that carry the meaning.
+  const summary = `温度趋势：最低 ${Math.round(min)}${unit}，最高 ${Math.round(max)}${unit}`
+
   return (
-    <svg viewBox={`0 0 ${WIDTH} ${height}`} width="100%" height={height} style={{ display: 'block' }} aria-hidden="true">
+    <svg
+      viewBox={`0 0 ${WIDTH} ${height}`}
+      width="100%"
+      height={height}
+      style={{ display: 'block' }}
+      role="img"
+      aria-label={summary}
+    >
       <defs>
         <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" style={{ stopColor: TOKEN.accent, stopOpacity: 0.3 }} />

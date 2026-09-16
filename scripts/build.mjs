@@ -9,8 +9,11 @@
  * See scripts/build-lib.mjs for the shared build core.
  */
 import { rmSync } from 'node:fs'
-import { buildLib } from './build-lib.mjs'
+import path from 'node:path'
+import { buildLib, ROOT } from './build-lib.mjs'
 
-rmSync('lib', { recursive: true, force: true })
+// Resolved against the repo root, so `node scripts/build.mjs` from another
+// directory rebuilds this project's `lib/` instead of deleting an unrelated one.
+rmSync(path.join(ROOT, 'lib'), { recursive: true, force: true })
 await buildLib('lib')
 console.log('dsh-weather: built lib/index.js (host) and lib/client.js (browser bundle)')
