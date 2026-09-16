@@ -1,6 +1,15 @@
 /**
  * WMO weather interpretation codes → Chinese label + emoji.
  * See https://open-meteo.com/en/docs (weather variable `weather_code`).
+ *
+ * The emoji IS the whole icon on the browser-tab title, so each code gets the
+ * glyph for the intensity it names rather than a family default: snow splits
+ * ❄️ 小雪/阵雪 · 🌨️ 中雪 · ⛄ 大雪/强阵雪 · 🧊 米雪, drizzle is 🌦️ while rain is
+ * 🌧️, freezing precipitation carries 🧊, and 🌩️ is reserved for the
+ * hail-bearing thunderstorm codes (⛈️ stays the plain-thunder and heavy-rain
+ * glyph). A shared glyph only survives where two codes name the same thing —
+ * 雾/冻雾, 冻雨/冻毛毛雨/米雪, 小雨/阵雨, 中雨/强阵雨, 大雪/强阵雪.
+ * The tab title prints the label too, because 🌧️ alone cannot say 小雨 vs 中雨.
  */
 import type { WeatherData } from './weather-api'
 
@@ -23,16 +32,33 @@ export const HEAVY_RAIN_CODES = new Set([65, 82, 99])
 export const HEAVY_SNOW_CODES = new Set([75, 86])
 /** Any code that produces precipitation on the ground — rain OR snow. */
 export const PRECIP_CODES = new Set([...RAIN_CODES, ...THUNDER_CODES, ...SNOW_CODES])
-/** Heavy rain + thunder — the "强降雨/雷暴" severe family (lead-time scan). */
-export const STORM_CODES = new Set([...HEAVY_RAIN_CODES, ...THUNDER_CODES])
 
 /**
- * Shared rule thresholds. All values are metric (°C / km/h) because the feed
- * is metric-only; the display unit never changes the rules.
+ * Shared rule thresholds. All values are metric (°C / km/h / mm/h) because the
+ * feed is metric-only; the display unit never changes the rules.
+ *
+ * A WMO code alone says what kind of weather it is, never how hard it hits, so
+ * every family splits into two tiers and the `danger` tier is reserved for
+ * conditions that are actually hazardous. Calling an ordinary summer day
+ * "danger" is how an alert feed stops being believed.
  */
-export const HEAT_C = 35
-export const COLD_C = 0
-export const WIND_ALERT_KMH = 60
+export const HEAT_WARN_C = 35
+/** 40 °C is China's red heat-wave line; below it 35 °C is merely a hot day. */
+export const HEAT_DANGER_C = 40
+/** Frost advisory threshold. Reaching 0 °C is a frost warning, not a cold alert. */
+export const FROST_C = 0
+export const COLD_WARN_C = -8
+export const COLD_DANGER_C = -15
+export const WIND_WARN_KMH = 60
+/** Beaufort 10 sustained wind — the level that actually damages things. */
+export const WIND_DANGER_KMH = 89
+/** Severe-thunderstorm gust criterion (58 mph ≈ 93 km/h), rounded down. */
+export const GUST_WARN_KMH = 89
+export const GUST_DANGER_KMH = 118
+/** 暴雨 rate (China's 24 h red line compressed to an hourly rate). */
+export const RAIN_DANGER_MMH = 20
+/** Snowfall is reported in water equivalent: ~2 mm/h ≈ 2 cm of fresh snow. */
+export const SNOW_WARN_MMH = 2
 export const WIND_ADVICE_KMH = 40
 
 const DAY: Record<number, ConditionInfo> = {
@@ -43,27 +69,27 @@ const DAY: Record<number, ConditionInfo> = {
   45: { label: '雾', emoji: '🌫️' },
   48: { label: '冻雾', emoji: '🌫️' },
   51: { label: '毛毛雨', emoji: '🌦️' },
-  53: { label: '毛毛雨', emoji: '🌦️' },
-  55: { label: '浓毛毛雨', emoji: '🌦️' },
-  56: { label: '冻毛毛雨', emoji: '🌧️' },
+  53: { label: '细雨', emoji: '🌦️' },
+  55: { label: '浓毛毛雨', emoji: '🌧️' },
+  56: { label: '冻毛毛雨', emoji: '🧊' },
   57: { label: '强冻毛毛雨', emoji: '🌧️' },
   61: { label: '小雨', emoji: '🌧️' },
   63: { label: '中雨', emoji: '🌧️' },
-  65: { label: '大雨', emoji: '🌧️' },
-  66: { label: '冻雨', emoji: '🌧️' },
-  67: { label: '强冻雨', emoji: '🌧️' },
+  65: { label: '大雨', emoji: '⛈️' },
+  66: { label: '冻雨', emoji: '🧊' },
+  67: { label: '强冻雨', emoji: '🧊' },
   71: { label: '小雪', emoji: '❄️' },
-  73: { label: '中雪', emoji: '❄️' },
-  75: { label: '大雪', emoji: '❄️' },
-  77: { label: '米雪', emoji: '🌨️' },
+  73: { label: '中雪', emoji: '🌨️' },
+  75: { label: '大雪', emoji: '⛄' },
+  77: { label: '米雪', emoji: '🧊' },
   80: { label: '阵雨', emoji: '🌦️' },
-  81: { label: '强阵雨', emoji: '🌦️' },
-  82: { label: '暴阵雨', emoji: '⛈️' },
-  85: { label: '阵雪', emoji: '🌨️' },
-  86: { label: '强阵雪', emoji: '🌨️' },
-  95: { label: '雷暴', emoji: '⛈️' },
-  96: { label: '雷暴伴冰雹', emoji: '⛈️' },
-  99: { label: '强雷暴伴冰雹', emoji: '⛈️' },
+  81: { label: '强阵雨', emoji: '🌧️' },
+  82: { label: '暴阵雨', emoji: '🌧️' },
+  85: { label: '阵雪', emoji: '❄️' },
+  86: { label: '强阵雪', emoji: '⛄' },
+  95: { label: '雷阵雨', emoji: '⛈️' },
+  96: { label: '雷暴伴冰雹', emoji: '🌩️' },
+  99: { label: '强雷暴伴冰雹', emoji: '🌩️' },
 }
 
 const NIGHT: Record<number, ConditionInfo> = {
@@ -143,10 +169,10 @@ export function weatherAdvice(data: WeatherData): { icon: string; text: string }
   if (PRECIP_CODES.has(code)) {
     return { icon: '☂️', text: '有降水，出门记得带伞' }
   }
-  if (current.temperature >= HEAT_C) {
+  if (current.temperature >= HEAT_WARN_C) {
     return { icon: '🥵', text: '高温天气，注意防暑补水' }
   }
-  if (current.temperature <= COLD_C) {
+  if (current.temperature <= COLD_WARN_C) {
     return { icon: '🧣', text: '严寒天气，注意防寒保暖' }
   }
   if (current.temperature >= 28 && isClear) {

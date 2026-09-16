@@ -28,6 +28,25 @@ check('daily brief fields', bundle.includes('briefMorning') && bundle.includes('
 check('brief dedupe key prefix', bundle.includes('dsh-weather-brief-'))
 check('day-detail request range', bundle.includes('start_date') && bundle.includes('end_date'))
 
+// Weather-icon intensity: the snowflake arms are generated from the radius, so
+// each storm's radius is its identity (the radius argument survives esbuild's
+// JSX lowering verbatim). A regression that collapses 小雪/中雪/大雪 — or
+// 小雨/中雨/大雨 — back onto one glyph drops the matching literal and fails
+// here. Rain intensity is asserted through the drop-count helpers instead.
+check('light snow flake (小雪 71)', bundle.includes('flake(12, 20, 2.2'))
+check('moderate snow flake (中雪 73/阵雪 85)', bundle.includes('flake(12, 19.6, 3.2'))
+check('heavy snow flakes (大雪 75/强阵雪 86)', bundle.includes('flake(9, 19.4, 2.8') && bundle.includes('flake(15, 20, 2.8'))
+check('snow grains pellets (米雪 77)', bundle.includes('cx: "12", cy: "17.5"'))
+check('drizzle strokes (毛毛雨 51/小雨 61)', bundle.includes('drop(8, 19.5, 1.8'))
+check('light-rain single drop (浓毛毛雨 55)', bundle.includes('drop(12, 18.5, 4'))
+check('moderate-rain three drops (中雨 63)', bundle.includes('drop(12, 19, 3, "b")'))
+check('heavy-rain four drops (大雨 65)', bundle.includes('drop(16.5, 18.5, 3.5, "d")'))
+check('freezing-rain ice pellet (冻雨 66)', bundle.includes('cx: "12", cy: "20.5"'))
+// ⛈️ vs 🌩️: the hail glyph adds pellets below the bolt, the plain one does not.
+const bolt = bundle.includes('13 11 9 17 15 17 11 23')
+check('thunderstorm bolt (雷阵雨 95)', bolt)
+check('hail-bearing thunderstorm pellets (96/99)', bolt && bundle.includes('cx: "7", cy: "21"'))
+
 // React must come from the injected platform require, never be inlined: two React
 // copies in one page break hooks in ways that are painful to diagnose.
 check('React not inlined', !/react\.production|__SECRET_INTERNALS|ReactCurrentDispatcher/.test(bundle))

@@ -13,7 +13,22 @@
  */
 // WMO code families & rule thresholds — single source in condition.ts; the
 // alert rules and the UI hints must agree on what counts as rain/thunder/etc.
-import { COLD_C, HEAT_C, HEAVY_RAIN_CODES, HEAVY_SNOW_CODES, STORM_CODES, THUNDER_CODES, WIND_ALERT_KMH } from './condition'
+import {
+  COLD_DANGER_C,
+  COLD_WARN_C,
+  FROST_C,
+  GUST_DANGER_KMH,
+  GUST_WARN_KMH,
+  HEAT_DANGER_C,
+  HEAT_WARN_C,
+  HEAVY_RAIN_CODES,
+  HEAVY_SNOW_CODES,
+  RAIN_DANGER_MMH,
+  SNOW_WARN_MMH,
+  THUNDER_CODES,
+  WIND_DANGER_KMH,
+  WIND_WARN_KMH,
+} from './condition'
 
 /** A resolved place with coordinates, displayed in the weather bar. */
 export interface GeoLocation {
@@ -988,13 +1003,58 @@ export interface WeatherAlert {
 const LEAD_HOURS = 12
 
 /**
+ * How hard a condition is actually hitting, which a WMO code alone never says.
+ * `danger` is deliberately hard to reach: it is reserved for hail, a violent
+ * shower, 暴雨-rate rain, Bft-10 wind, Bft-12 gusts and 40 °C heat, so the red
+ * banner keeps meaning something. Ordinary thunder, 大雨 and 大雪 are
+ * `warning`s, and a code whose measured intensity stays light is `info` — the
+ * level that raises no alert at all.
+ */
+export type AlertSeverity = 'info' | 'warning' | 'danger'
+
+/** WMO 96/99 carry hail; 82 is a violent shower — those three are the codes
+ * that are hazardous on their own. Everything else needs measured intensity. */
+const HAZARD_CODES = new Set([82, 96, 99])
+/** The hail-bearing subset of {@link HAZARD_CODES} — codes 96 and 99. */
+const HAIL_CODES = new Set([96, 99])
+
+/**
+ * Classify ONE weather code (plus the intensity evidence around it) on the
+ * severity scale. Codes 96/99 carry hail and are dangerous on their own; so is
+ * a violent shower (82), which is exactly what 暴雨 means. A plain 95 (an
+ * ordinary — usually brief — thunderstorm) or a plain 65 (大雨) is only a
+ * warning unless the measured rate or gusts say otherwise.
+ * @param precipitation - precipitation rate at the same moment (mm/h), absent
+ *   when the feed did not report it — the magnitude checks are then skipped
+ *   rather than guessed at.
+ * @param gustKmh - the strongest gust at the same moment (km/h), if known.
+ */
+export function severityOfCode(code: number, precipitation?: number, gustKmh?: number): AlertSeverity {
+  const hazard = HAZARD_CODES.has(code)
+  const thunder = THUNDER_CODES.has(code)
+  const heavyRain = HEAVY_RAIN_CODES.has(code)
+  const heavySnow = HEAVY_SNOW_CODES.has(code)
+  if (!hazard && !thunder && !heavyRain && !heavySnow) return 'info'
+  const rate = precipitation !== undefined && Number.isFinite(precipitation) ? precipitation : undefined
+  const gust = gustKmh !== undefined && Number.isFinite(gustKmh) ? gustKmh : undefined
+  if (rate !== undefined && rate >= RAIN_DANGER_MMH) return 'danger'
+  if (gust !== undefined && gust >= GUST_DANGER_KMH) return 'danger'
+  if (hazard) return 'danger'
+  if (thunder) return 'warning'
+  if (heavyRain) return rate !== undefined && rate >= SNOW_WARN_MMH ? 'warning' : 'info'
+  // Heavy snow: the code says 大雪/强阵雪, the rate says how much is landing —
+  // with no rate reported, trust the code rather than dropping the warning.
+  return rate === undefined || rate >= SNOW_WARN_MMH ? 'warning' : 'info'
+}
+
+/**
  * Rule-based severe-weather evaluation. Open-Meteo has no alert coverage for
  * China (MeteoAlarm is Europe-centric), so the plugin derives actionable
  * alerts from the observed and forecast weather itself.
  *
  * Two tiers are evaluated:
- * - **Current** — what the conditions are right now (`heat`/`cold`/`wind`/
- *   `heavy-rain`/`thunder`/`heavy-snow`).
+ * - **Current** — what the conditions are right now (`heat`/`cold`/`frost`/
+ *   `wind`/`heavy-rain`/`thunder`/`heavy-snow`).
  * - **Lead time** (`*-soon`) — a severe condition in the next {@link LEAD_HOURS}
  *   hours of the hourly forecast, only when the matching current alert is not
  *   already firing, so a storm/heatwave on the way gets announced ahead of time
@@ -1002,6 +1062,13 @@ const LEAD_HOURS = 12
  *   step that CONTAINS the current moment (see fetchWeather), so events in the
  *   remainder of the current hour are covered; the dedupe keys above prevent
  *   double-notifying conditions that are already firing.
+ *
+ * Severity is calibrated by {@link severityOfCode} plus the temperature/wind
+ * thresholds in condition.ts, never by the WMO code alone: 95 alone is a
+ * 雷阵雨 warning, and only hail, a violent shower, 暴雨-rate rain, Bft-10+ wind,
+ * Bft-12 gusts or 40 °C heat reach `danger`. Alert titles therefore name what
+ * was measured — an ordinary thunderstorm is never announced as a 雷暴, and
+ * "暴雨" is never claimed for a plain 大雨.
  *
  * Values are metric (°C / km/h); `fmt` renders temperatures and `windFmt`
  * renders wind speeds in the active display unit so the alert text never mixes
@@ -1018,71 +1085,129 @@ export function evaluateAlerts(
   const alerts: WeatherAlert[] = []
   const hasKey = (key: string): boolean => alerts.some((alert) => alert.key === key)
   const current = data.current
+  const curSeverity = severityOfCode(current.weatherCode, current.precipitation, current.windGusts)
 
-  if (current.temperature >= HEAT_C) {
+  if (current.temperature >= HEAT_DANGER_C) {
+    alerts.push({ key: 'heat', level: 'danger', title: '酷热', detail: `当前 ${fmt(current.temperature)}，减少外出，谨防中暑` })
+  } else if (current.temperature >= HEAT_WARN_C) {
     alerts.push({ key: 'heat', level: 'warning', title: '高温', detail: `当前 ${fmt(current.temperature)}，注意防暑` })
-  } else if (current.temperature <= COLD_C) {
+  } else if (current.temperature <= COLD_DANGER_C) {
+    alerts.push({ key: 'cold', level: 'danger', title: '严寒', detail: `当前 ${fmt(current.temperature)}，注意防寒防冻` })
+  } else if (current.temperature <= COLD_WARN_C) {
     alerts.push({ key: 'cold', level: 'warning', title: '低温', detail: `当前 ${fmt(current.temperature)}，注意保暖` })
-  }
-  const windKmh = current.windSpeed
-  if (windKmh !== undefined && windKmh >= WIND_ALERT_KMH) {
-    alerts.push({ key: 'wind', level: 'warning', title: '大风', detail: `风速 ${windFmt(windKmh)}` })
-  }
-  const code = current.weatherCode
-  if (HEAVY_RAIN_CODES.has(code)) {
-    alerts.push({ key: 'heavy-rain', level: 'danger', title: '强降雨', detail: '大雨或暴风雨，注意出行安全' })
-  } else if (THUNDER_CODES.has(code)) {
-    alerts.push({ key: 'thunder', level: 'danger', title: '雷暴', detail: '雷电天气，注意防范' })
-  }
-  if (HEAVY_SNOW_CODES.has(code)) {
-    alerts.push({ key: 'heavy-snow', level: 'warning', title: '强降雪', detail: '大雪天气，注意路况' })
+  } else if (current.temperature <= FROST_C) {
+    // Freezing is not a cold alert — it is a surface-frost note for drivers and
+    // plants. The old rule shouted "低温" at 0 °C all winter long.
+    alerts.push({ key: 'frost', level: 'warning', title: '霜冻', detail: `当前 ${fmt(current.temperature)}，路面可能结霜` })
   }
 
-  // Lead-time tier: scan the hourly grid from the step containing now.
+  const windKmh = current.windSpeed
+  const gustKmh = current.windGusts
+  if (windKmh !== undefined && windKmh >= WIND_DANGER_KMH) {
+    alerts.push({ key: 'wind', level: 'danger', title: '狂风', detail: `风速 ${windFmt(windKmh)}，尽量减少外出` })
+  } else if (gustKmh !== undefined && gustKmh >= GUST_DANGER_KMH) {
+    // A Bft-12 gust is destructive on its own, even with a calm mean wind.
+    alerts.push({ key: 'wind', level: 'danger', title: '狂风', detail: `阵风 ${windFmt(gustKmh)}，尽量减少外出` })
+  } else if (
+    (windKmh !== undefined && windKmh >= WIND_WARN_KMH)
+    || (gustKmh !== undefined && gustKmh >= GUST_WARN_KMH)
+  ) {
+    // Sustained wind or gusts can each be the reason on their own; report
+    // whichever one fired.
+    const sustainedAlert = windKmh !== undefined && windKmh >= WIND_WARN_KMH
+    const gustAlert = gustKmh !== undefined && gustKmh >= GUST_WARN_KMH
+    const detail = sustainedAlert && windKmh !== undefined
+      ? `风速 ${windFmt(windKmh)}${gustKmh !== undefined ? `，阵风 ${windFmt(gustKmh)}` : ''}`
+      : `阵风 ${windFmt(gustKmh ?? 0)}`
+    alerts.push({ key: 'wind', level: 'warning', title: gustAlert ? '强阵风' : '大风', detail })
+  }
+
+  // Precipitation family. Each branch reports the condition the code names and
+  // escalates only on measured intensity — code 65 is "大雨", never "暴雨", and
+  // code 95 on its own is a 雷阵雨. The title names the worst thing actually
+  // present (hail > Bft-12 gust > 暴雨-rate rain), so it never overstates.
+  if (curSeverity !== 'info') {
+    const code = current.weatherCode
+    const hail = HAIL_CODES.has(code)
+    const gale = gustKmh !== undefined && gustKmh >= GUST_DANGER_KMH
+    if (hail || (gale && THUNDER_CODES.has(code))) {
+      alerts.push({
+        key: 'thunder',
+        level: 'danger',
+        title: '强对流',
+        detail: hail ? '雷电伴冰雹，注意防范' : '雷雨伴强阵风，注意防范',
+      })
+    } else if (HEAVY_RAIN_CODES.has(code)) {
+      // 82 (violent shower) is danger by code, 65 (大雨) only by measured rate.
+      alerts.push(curSeverity === 'danger'
+        ? { key: 'heavy-rain', level: 'danger', title: '暴雨', detail: '降雨强度大，注意出行安全与积水' }
+        : { key: 'heavy-rain', level: 'warning', title: '大雨', detail: '雨势较大，注意出行安全' })
+    } else if (THUNDER_CODES.has(code)) {
+      alerts.push(curSeverity === 'danger'
+        ? { key: 'thunder', level: 'danger', title: '雷雨', detail: '雷电伴强降雨，注意防范' }
+        : { key: 'thunder', level: 'warning', title: '雷阵雨', detail: '有雷电活动，注意避雨' })
+    } else {
+      alerts.push({ key: 'heavy-snow', level: 'warning', title: '强降雪', detail: '降雪明显，注意路况' })
+    }
+  }
+
+  // Lead-time tier: scan the hourly grid from the step containing now. Only a
+  // genuinely hazardous hour qualifies, and the wording stays a forecast.
   const future = data.hourly.slice(0, LEAD_HOURS)
   if (future.length > 0) {
-    const stormSoon = future.some((h) => STORM_CODES.has(h.weatherCode))
-    if (stormSoon && !hasKey('heavy-rain') && !hasKey('thunder')) {
+    let stormSoon = false
+    let snowSoon = false
+    let heatMaxC = Number.NEGATIVE_INFINITY
+    let coldMinC = Number.POSITIVE_INFINITY
+    let maxWindKmh: number | undefined
+    for (const h of future) {
+      if (severityOfCode(h.weatherCode) === 'danger') stormSoon = true
+      if (HEAVY_SNOW_CODES.has(h.weatherCode)) snowSoon = true
+      heatMaxC = Math.max(heatMaxC, h.temperature)
+      coldMinC = Math.min(coldMinC, h.temperature)
+      if (h.windSpeed !== undefined) maxWindKmh = Math.max(maxWindKmh ?? h.windSpeed, h.windSpeed)
+    }
+    // Mild thunder in the window is left to the hourly strip alone: announcing
+    // a 雷暴 for a rumble three hours out is exactly the overstatement this scan
+    // used to produce (it fired on ANY thunder code).
+    if (stormSoon && curSeverity !== 'danger') {
       alerts.push({
         key: 'storm-soon',
         level: 'danger',
-        title: '强降雨/雷暴',
-        detail: `未来 ${LEAD_HOURS} 小时可能有强降雨或雷暴，请留意天气变化`,
+        title: '强对流天气',
+        detail: `未来 ${LEAD_HOURS} 小时可能出现强降雨或雷暴，请留意天气变化`,
       })
     }
-    const heatMaxC = Math.max(...future.map((h) => h.temperature))
-    if (heatMaxC >= HEAT_C && !hasKey('heat')) {
+    if (heatMaxC >= HEAT_WARN_C && !hasKey('heat')) {
       alerts.push({
         key: 'heat-soon',
-        level: 'warning',
-        title: '高温',
+        level: heatMaxC >= HEAT_DANGER_C ? 'danger' : 'warning',
+        title: heatMaxC >= HEAT_DANGER_C ? '酷热' : '高温',
         detail: `未来 ${LEAD_HOURS} 小时最高可达 ${fmt(heatMaxC)}，注意防暑`,
       })
     }
-    const coldMinC = Math.min(...future.map((h) => h.temperature))
-    if (coldMinC <= COLD_C && !hasKey('cold')) {
+    if (coldMinC <= COLD_WARN_C && !hasKey('cold')) {
       alerts.push({
         key: 'cold-soon',
-        level: 'warning',
-        title: '低温',
+        level: coldMinC <= COLD_DANGER_C ? 'danger' : 'warning',
+        title: coldMinC <= COLD_DANGER_C ? '严寒' : '低温',
         detail: `未来 ${LEAD_HOURS} 小时最低将降至 ${fmt(coldMinC)}，注意保暖`,
       })
     }
-    const windSpeeds = future.map((h) => h.windSpeed).filter((v): v is number => v !== undefined)
-    if (windSpeeds.length > 0 && Math.max(...windSpeeds) >= WIND_ALERT_KMH && !hasKey('wind')) {
+    if (maxWindKmh !== undefined && maxWindKmh >= WIND_WARN_KMH && !hasKey('wind')) {
       alerts.push({
         key: 'wind-soon',
-        level: 'warning',
-        title: '大风',
-        detail: `未来 ${LEAD_HOURS} 小时风力较大（最大 ${windFmt(Math.max(...windSpeeds))}），注意高空坠物`,
+        level: maxWindKmh >= WIND_DANGER_KMH ? 'danger' : 'warning',
+        title: maxWindKmh >= WIND_DANGER_KMH ? '狂风' : '大风',
+        detail: `未来 ${LEAD_HOURS} 小时风力较大（最大 ${windFmt(maxWindKmh)}），注意高空坠物`,
       })
     }
-    if (future.some((h) => HEAVY_SNOW_CODES.has(h.weatherCode)) && !hasKey('heavy-snow')) {
+    if (snowSoon && !hasKey('heavy-snow')) {
       alerts.push({
         key: 'snow-soon',
         level: 'warning',
         title: '强降雪',
-        detail: `未来 ${LEAD_HOURS} 小时可能有强降雪，注意路况`,
+        detail: `未来 ${LEAD_HOURS} 小时可能有明显降雪，注意路况`,
       })
     }
   }

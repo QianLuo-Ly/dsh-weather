@@ -4,7 +4,7 @@
  * theme; the sun, raindrops and lightning carry their own weather colors.
  * No gradients, no shared defs — safe to render many instances at once.
  */
-import type { ReactElement } from 'react'
+import { Fragment, type ReactElement } from 'react'
 import { PALETTE } from './theme'
 
 /** Feather cloud (upper area). */
@@ -68,62 +68,136 @@ function Fog(): ReactElement {
   )
 }
 
+/** One falling raindrop. `length` distinguishes drizzle (short) from rain. */
+function drop(x: number, y: number, length: number, key: string): ReactElement {
+  return <path key={key} d={`M${x} ${y}v${length}`} stroke={PALETTE.rain} />
+}
+/** Drizzle: short drops, the lightest rain the code table names. */
 function Drizzle(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v2" stroke={PALETTE.rain} />
-      <path d="M12 19v2" stroke={PALETTE.rain} />
-      <path d="M16 19v2" stroke={PALETTE.rain} />
+      {drop(8, 19.5, 1.8, 'a')}
+      {drop(12, 19.5, 1.8, 'b')}
+      {drop(16, 19.5, 1.8, 'c')}
     </>
   )
 }
 
+/** Light rain: a single full-size drop. */
+function RainLight(): ReactElement {
+  return (
+    <>
+      <path d={CLOUD_LOW} />
+      {drop(12, 18.5, 4, 'a')}
+    </>
+  )
+}
+
+/** Moderate rain: three full-size drops. */
 function Rain(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v3" stroke={PALETTE.rain} />
-      <path d="M12 19v3" stroke={PALETTE.rain} />
-      <path d="M16 19v3" stroke={PALETTE.rain} />
+      {drop(8, 19, 3, 'a')}
+      {drop(12, 19, 3, 'b')}
+      {drop(16, 19, 3, 'c')}
     </>
   )
 }
 
+/** Heavy rain: four staggered drops reaching lower than the rest. */
 function HeavyRain(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M7.5 19v3.5" stroke={PALETTE.rain} />
-      <path d="M10.5 18.5v3.5" stroke={PALETTE.rain} />
-      <path d="M13.5 19v3.5" stroke={PALETTE.rain} />
-      <path d="M16.5 18.5v3.5" stroke={PALETTE.rain} />
+      {drop(7.5, 19, 3.5, 'a')}
+      {drop(10.5, 18.5, 3.5, 'b')}
+      {drop(13.5, 19, 3.5, 'c')}
+      {drop(16.5, 18.5, 3.5, 'd')}
     </>
   )
 }
 
+/** Snowflake centered on (x, y) with the given arm radius. */
+function flake(x: number, y: number, r: number, key: string): ReactElement {
+  const q = r * 0.5
+  return (
+    <Fragment key={key}>
+      <path d={`M${x} ${y - r}v${r * 2}`} />
+      <path d={`M${x - q} ${y - q}l${r} ${r}`} />
+      <path d={`M${x + q} ${y - q}l${-r} ${r}`} />
+    </Fragment>
+  )
+}
+
+/** Light snow: one small flake under the cloud. */
+function SnowLight(): ReactElement {
+  return (
+    <>
+      <path d={CLOUD_LOW} />
+      {flake(12, 20, 2.2, 'a')}
+    </>
+  )
+}
+
+/** Moderate snow: the same cloud, a full-size flake. */
 function Snow(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 18.5v3" />
-      <path d="M6.5 20h3" />
-      <path d="M12 18v3" />
-      <path d="M10.5 19.5h3" />
-      <path d="M16 18.5v3" />
-      <path d="M14.5 20h3" />
+      {flake(12, 19.6, 3.2, 'a')}
     </>
   )
 }
 
-function Sleet(): ReactElement {
+/** Heavy snow: two flakes plus ice pellets — the densest of the three. */
+function SnowHeavy(): ReactElement {
   return (
     <>
       <path d={CLOUD_LOW} />
-      <path d="M8 19v2" stroke={PALETTE.rain} />
-      <path d="M16 19v2" stroke={PALETTE.rain} />
-      <path d="M12 18.5v3" />
-      <path d="M10.5 20h3" />
+      {flake(9, 19.4, 2.8, 'a')}
+      {flake(15, 20, 2.8, 'b')}
+      <circle cx="12" cy="22.4" r="1" fill="currentColor" stroke="none" />
+    </>
+  )
+}
+
+/** Snow grains / snow showers: small scattered ice pellets, no full flake. */
+function SnowGrains(): ReactElement {
+  return (
+    <>
+      <path d={CLOUD_LOW} />
+      <circle cx="8" cy="19" r="1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="21" r="1" fill="currentColor" stroke="none" />
+      <circle cx="16" cy="19" r="1" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="17.5" r="1" fill="currentColor" stroke="none" />
+    </>
+  )
+}
+
+/** Freezing rain: a drop with an ice pellet — rain that freezes on contact. */
+function FreezingRain(): ReactElement {
+  return (
+    <>
+      <path d={CLOUD_LOW} />
+      {drop(8, 19, 3, 'a')}
+      {drop(16, 19, 3, 'b')}
+      <circle cx="12" cy="20.5" r="1.2" fill="currentColor" stroke="none" />
+    </>
+  )
+}
+
+/** Heavy freezing rain: the same ice, with the heavy-rain drop pattern. */
+function FreezingRainHeavy(): ReactElement {
+  return (
+    <>
+      <path d={CLOUD_LOW} />
+      {drop(7.5, 19, 3.5, 'a')}
+      {drop(10.5, 18.5, 3.5, 'b')}
+      {drop(13.5, 19, 3.5, 'c')}
+      {drop(16.5, 18.5, 3.5, 'd')}
+      <circle cx="12" cy="22.6" r="1.1" fill="currentColor" stroke="none" />
     </>
   )
 }
@@ -165,16 +239,32 @@ export function WeatherIcon(props: { code: number; isDay: boolean; size?: number
     node = <Cloud />
   } else if (code === 45 || code === 48) {
     node = <Fog />
-  } else if (code === 51 || code === 53 || code === 55 || code === 56 || code === 57) {
+  } else if (code === 51 || code === 53 || code === 61 || code === 80) {
+    // Rain too light to draw differently from drizzle, and the label already
+    // separates 毛毛雨/细雨 from 小雨/阵雨.
     node = <Drizzle />
-  } else if (code === 61 || code === 63 || code === 65 || code === 66 || code === 67) {
+  } else if (code === 55) {
+    node = <RainLight />
+  } else if (code === 56 || code === 66) {
+    node = <FreezingRain />
+  } else if (code === 57 || code === 67) {
+    node = <FreezingRainHeavy />
+  } else if (code === 63 || code === 81) {
     node = <Rain />
-  } else if (code === 80 || code === 81 || code === 82) {
+  } else if (code === 65 || code === 82) {
     node = <HeavyRain />
-  } else if (code === 71 || code === 73 || code === 75 || code === 77) {
+  } else if (code === 71) {
+    node = <SnowLight />
+  } else if (code === 73) {
     node = <Snow />
-  } else if (code === 85 || code === 86) {
-    node = <Sleet />
+  } else if (code === 75) {
+    node = <SnowHeavy />
+  } else if (code === 77) {
+    node = <SnowGrains />
+  } else if (code === 85) {
+    node = <Snow />
+  } else if (code === 86) {
+    node = <SnowHeavy />
   } else if (code === 95) {
     node = <Thunder />
   } else if (code === 96 || code === 99) {

@@ -437,7 +437,7 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
         </div>
       )}
       <div style={{ color: MUTED, fontSize: 12, margin: '-2px 0 10px 12px' }}>
-        强降雨 / 雷暴 / 高温 / 大风 / 强降雪时发送浏览器通知。
+        强降雨 / 雷暴 / 高温 / 大风 / 强降雪等确实恶劣的天气时发送浏览器通知。
       </div>
 
       <Row label="每日天气简报" labelFor={`${ids}-brief`}>

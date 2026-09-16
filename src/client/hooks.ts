@@ -921,7 +921,7 @@ export function useDailyBrief(options: {
       const rain = day.precipProb > 0 ? ` · 降水 ${day.precipProb}%` : ''
       return {
         title: `${slot === 'morning' ? '☀️ 今日天气' : '🌙 明日天气'} · ${placeName}`,
-        body: `${condition.label} ${range}${rain}`,
+        body: `${condition.emoji} ${condition.label} ${range}${rain}`,
       }
     }
 
@@ -1035,7 +1035,9 @@ export function useTabTitle(options: {
       baseTitleRef.current = match !== null ? current.slice(match[0].length) : current
     }
     const condition = describeCondition(data.current.weatherCode, data.current.isDay)
-    const title = `${condition.emoji} ${tempText(data.current.temperature, effective.units)} ${placeName} — ${baseTitleRef.current ?? current}`
+    // The label rides along with the emoji: several glyphs are shared across
+    // codes (🌧 is 小雨 through 中雨), and the emoji alone would not say which.
+    const title = `${condition.emoji} ${condition.label} ${tempText(data.current.temperature, effective.units)} ${placeName} — ${baseTitleRef.current ?? current}`
     if (document.title !== title) document.title = title
     lastWrittenRef.current = title
   }, [data, effective.enabled, effective.units, placeName, status])
