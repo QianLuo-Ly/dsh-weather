@@ -45,7 +45,22 @@ check('freezing-rain ice pellet (冻雨 66)', bundle.includes('cx: "12", cy: "20
 // ⛈️ vs 🌩️: the hail glyph adds pellets below the bolt, the plain one does not.
 const bolt = bundle.includes('13 11 9 17 15 17 11 23')
 check('thunderstorm bolt (雷阵雨 95)', bolt)
-check('hail-bearing thunderstorm pellets (96/99)', bolt && bundle.includes('cx: "7", cy: "21"'))
+// The hail glyph is GONE on purpose: the description layer never asserts hail
+// (Open-Meteo derives 96/99 from model convective parameters and fired 19 hail
+// hours in one month at 天河区), so an icon with hail pellets under a 「雷雨」
+// label would be the same overstatement in picture form.
+check('hail glyph removed', !bundle.includes('cx: "7", cy: "21"'))
+
+// Hail codes must not be danger-on-their-own: Open-Meteo's 96/99 come from model
+// convective parameters and fire far more often than hail falls, so a 96 over
+// light rain has to stay a plain warning. HAZARD_CODES is down to the violent
+// shower (82) — the old `new Set([82, 96, 99])` red-bannered a drizzle — while
+// the hail set survives separately to word it as a possibility.
+check('hail codes are not danger-on-their-own', bundle.includes('new Set([82])') && !bundle.includes('new Set([82, 96, 99])'))
+check('hail codes still recognised separately', bundle.includes('new Set([96, 99])'))
+// Every intensity claim quotes the rate it rests on; the old wording asserted
+// 冰雹 outright with no evidence behind it.
+check('rain claims carry their measured rate', bundle.includes('mm/h'))
 
 // React must come from the injected platform require, never be inlined: two React
 // copies in one page break hooks in ways that are painful to diagnose.

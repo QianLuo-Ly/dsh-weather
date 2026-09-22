@@ -6,6 +6,7 @@
  */
 import { Fragment, type ReactElement } from 'react'
 import { PALETTE } from './theme'
+import type { SkyGlyph } from './describe'
 
 /** Feather cloud (upper area). */
 const CLOUD = 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z'
@@ -211,67 +212,44 @@ function Thunder(): ReactElement {
   )
 }
 
-function ThunderHail(): ReactElement {
-  return (
-    <>
-      <path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9" />
-      <polyline points="13 11 9 17 15 17 11 23" stroke={PALETTE.sun} fill="none" />
-      <circle cx="7" cy="21" r="1" fill="currentColor" stroke="none" />
-      <circle cx="11" cy="22" r="1" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="21" r="1" fill="currentColor" stroke="none" />
-    </>
-  )
-}
-
 function Unknown(): ReactElement {
   return <path d="M14 14.76V3.5a2.5 2.5 0 0 0-5 0v11.26a4.5 4.5 0 1 0 5 0z" />
 }
 
-/** Render the weather icon for a WMO code (+ day/night). */
-export function WeatherIcon(props: { code: number; isDay: boolean; size?: number }): ReactElement {
-  const { code, isDay, size = 24 } = props
-  let node: ReactElement
-  if (code === 0 || code === 1) {
-    node = isDay ? <Sun /> : <Moon />
-  } else if (code === 2) {
-    node = isDay ? <CloudSun /> : <CloudMoon />
-  } else if (code === 3) {
-    node = <Cloud />
-  } else if (code === 45 || code === 48) {
-    node = <Fog />
-  } else if (code === 51 || code === 53 || code === 61 || code === 80) {
-    // Rain too light to draw differently from drizzle, and the label already
-    // separates 毛毛雨/细雨 from 小雨/阵雨.
-    node = <Drizzle />
-  } else if (code === 55) {
-    node = <RainLight />
-  } else if (code === 56 || code === 66) {
-    node = <FreezingRain />
-  } else if (code === 57 || code === 67) {
-    node = <FreezingRainHeavy />
-  } else if (code === 63 || code === 81) {
-    node = <Rain />
-  } else if (code === 65 || code === 82) {
-    node = <HeavyRain />
-  } else if (code === 71) {
-    node = <SnowLight />
-  } else if (code === 73) {
-    node = <Snow />
-  } else if (code === 75) {
-    node = <SnowHeavy />
-  } else if (code === 77) {
-    node = <SnowGrains />
-  } else if (code === 85) {
-    node = <Snow />
-  } else if (code === 86) {
-    node = <SnowHeavy />
-  } else if (code === 95) {
-    node = <Thunder />
-  } else if (code === 96 || code === 99) {
-    node = <ThunderHail />
-  } else {
-    node = <Unknown />
-  }
+const GLYPH_NODES: Record<SkyGlyph, ReactElement> = {
+  'clear-day': <Sun />,
+  'clear-night': <Moon />,
+  'partly-day': <CloudSun />,
+  'partly-night': <CloudMoon />,
+  cloudy: <Cloud />,
+  // 轻雾与霾共用雾的图形：两者都是「能见度下降」，区分靠标签与 basis 里的湿度，
+  // 与 Drizzle 同时代表毛毛雨/细雨是同一个取舍。
+  fog: <Fog />,
+  drizzle: <Drizzle />,
+  'rain-light': <RainLight />,
+  rain: <Rain />,
+  'rain-heavy': <HeavyRain />,
+  'freezing-rain': <FreezingRain />,
+  'freezing-rain-heavy': <FreezingRainHeavy />,
+  'snow-light': <SnowLight />,
+  snow: <Snow />,
+  'snow-heavy': <SnowHeavy />,
+  'snow-grains': <SnowGrains />,
+  thunder: <Thunder />,
+  unknown: <Unknown />,
+}
+
+/**
+ * Render a weather icon for a {@link SkyGlyph}.
+ *
+ * The prop used to be a WMO code. It is now the glyph the description layer CHOSE,
+ * because the icon has to agree with the sentence next to it: the code's 96/99 name
+ * hail, and after the description layer stopped asserting hail (see describe.ts),
+ * an icon with hail pellets under a 「雷雨」 label would be the same overstatement
+ * in picture form. The hail glyph is gone with it.
+ */
+export function WeatherIcon(props: { glyph: SkyGlyph; size?: number }): ReactElement {
+  const { glyph, size = 24 } = props
   return (
     <svg
       width={size}
@@ -284,7 +262,7 @@ export function WeatherIcon(props: { code: number; isDay: boolean; size?: number
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {node}
+      {GLYPH_NODES[glyph]}
     </svg>
   )
 }

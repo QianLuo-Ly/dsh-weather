@@ -11,6 +11,7 @@ import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from './weathe
 import { RAIN_MM_PER_15MIN } from './weather-api'
 import { dayLabel, hourLabel, timeLabel } from './condition'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
+import { glyphForCode } from './describe'
 import { actionButton, NUM, PALETTE, TOKEN } from './theme'
 import { tempText, windText, type UnitSetting } from './units'
 
@@ -143,7 +144,7 @@ export function HourlyStrip(props: {
           <div key={point.time} style={{ flex: '0 0 auto', width: 46, textAlign: 'center', background: TOKEN.bgSoft, borderRadius: 10, padding: '5px 2px' }}>
             <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
             <div style={{ margin: '2px 0' }}>
-              <WeatherIcon code={point.weatherCode} isDay={point.isDay} size={18} />
+              <WeatherIcon glyph={glyphForCode(point.weatherCode, point.isDay)} size={18} />
             </div>
             {/* A step the feed did not report renders as "—", never as 0 °C. */}
             <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>
@@ -212,7 +213,7 @@ export function DailyList(props: {
             <>
               <span style={{ width: 44, flex: '0 0 auto', ...NUM }}>{dayLabel(point.date, index)}</span>
               <span style={{ width: 20, textAlign: 'center', flex: '0 0 auto' }}>
-                <WeatherIcon code={point.weatherCode} isDay={true} size={18} />
+                <WeatherIcon glyph={glyphForCode(point.weatherCode, true)} size={18} />
               </span>
               <span style={{ width: 36, flex: '0 0 auto', textAlign: 'right', fontSize: 11, color: point.precipProb !== undefined && point.precipProb > 0 ? TOKEN.accent : TOKEN.fgMuted, ...NUM }}>
                 {point.precipProb !== undefined ? `${point.precipProb}%` : '—'}
@@ -337,7 +338,7 @@ export function DayDetailPanel(props: {
             <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
             <div style={{ margin: '2px 0', minHeight: 18 }}>
               {point.weatherCode !== undefined
-                ? <WeatherIcon code={point.weatherCode} isDay={point.isDay} size={18} />
+                ? <WeatherIcon glyph={glyphForCode(point.weatherCode, point.isDay)} size={18} />
                 : <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>—</span>}
             </div>
             <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>

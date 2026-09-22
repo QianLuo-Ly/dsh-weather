@@ -22,11 +22,11 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSPrope
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../config-shared'
 import { evaluateAlerts } from './weather-api'
+import { describeSky } from './describe'
 import {
   aqiInfo,
   clockDate,
   clockTime,
-  describeCondition,
   hhmm,
   hourLabel,
   rainTimingText,
@@ -243,7 +243,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   // namespace) silently drop writes — disable the controls instead of letting
   // them look like they worked.
   const writable = scope.getSnapshot().writable
-  const condition = data !== null ? describeCondition(data.current.weatherCode, data.current.isDay) : null
+  const condition = data !== null ? describeSky(data.current) : null
   const unitSuffix = unitLabel(units)
   const windSuffixLabel = windUnitLabel(units)
 
@@ -259,7 +259,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   const showTemp = status === 'ready' && data !== null
   const barIcon = showTemp
-    ? <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={17} />
+    ? <WeatherIcon glyph={condition?.glyph ?? 'unknown'} size={17} />
     : <Glyph name="pin" size={15} />
 
   // Chip tooltip: full context at a glance without widening the header chip.
@@ -509,7 +509,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                   <div data-block="hero-stats" style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 4 }}>
                     <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
                       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 58, height: 58, borderRadius: 16, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.border}` }}>
-                        <WeatherIcon code={data.current.weatherCode} isDay={data.current.isDay} size={36} />
+                        <WeatherIcon glyph={condition?.glyph ?? 'unknown'} size={36} />
                       </div>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 30, fontWeight: 700, lineHeight: '34px', ...NUM }}>{fmt(data.current.temperature)}</div>

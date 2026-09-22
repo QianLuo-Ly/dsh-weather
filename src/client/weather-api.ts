@@ -23,13 +23,16 @@ import {
   HEAT_WARN_C,
   HEAVY_RAIN_CODES,
   HEAVY_SNOW_CODES,
-  RAIN_DANGER_MMH,
+  RAIN_TORRENTIAL_MMH,
   RAIN_WARN_MMH,
   SNOW_WARN_MMH,
   THUNDER_CODES,
   WIND_DANGER_KMH,
   WIND_WARN_KMH,
 } from './condition'
+// 描述层：只借它的短历时暴雨判定（标准阈值都在 condition.ts 与 describe.ts 里，
+// 这个文件不自己定阈值）。
+import { shortDurationDeluge } from './describe'
 
 /** A resolved place with coordinates, displayed in the weather bar. */
 export interface GeoLocation {
@@ -107,12 +110,38 @@ export interface CurrentWeather {
   /** Dew point temperature (°C). */
   dewPoint?: number
   /**
-   * Current precipitation RATE (mm/h). The feed reports an accumulation over
-   * the preceding `current.interval` seconds (900 = 15 min on Open-Meteo), so
-   * it is normalized to an hourly rate on ingest — every consumer, including
-   * {@link severityOfCode}, reads this as mm/h.
+   * Current precipitation RATE (mm/h), total. The feed reports an accumulation
+   * over the preceding `current.interval` seconds (900 = 15 min on Open-Meteo),
+   * so it is normalized to an hourly rate on ingest — every consumer reads this
+   * as mm/h.
    */
   precipitation?: number
+  /**
+   * The STRATIFORM part of {@link precipitation} (mm/h) — WMO's 连续性降水.
+   * Open-Meteo splits the total into `rain` (large-scale/steady) and
+   * {@link showers} (convective), which is the authoritative basis for calling
+   * something 阵雨 rather than 小雨 - a distinction the lumped `weather_code`
+   * cannot express.
+   */
+  rain?: number
+  /** The CONVECTIVE part of {@link precipitation} (mm/h) — WMO's 阵性降水. */
+  showers?: number
+  /** Snowfall rate (cm/h), water equivalent; 0 outside snow. */
+  snowfall?: number
+  /**
+   * Convective available potential energy (J/kg). A NECESSARY but nowhere near
+   * sufficient thunderstorm ingredient: 天河区 in September sits above 2000 J/kg
+   * around the clock, including clear hours, so it must never be read as
+   * "a thunderstorm is happening".
+   */
+  cape?: number
+  /** Lifted index (K); negative is unstable. Same caveat as {@link cape}. */
+  liftedIndex?: number
+  /**
+   * Height of the 0 °C level (m). Decides rain-vs-snow far more directly than a
+   * weather code: snow reaches the ground only once this is near the surface.
+   */
+  freezingLevel?: number
 }
 
 export interface HourlyPoint {
@@ -127,6 +156,14 @@ export interface HourlyPoint {
   weatherCode: number
   /** Precipitation probability (%), absent when the feed did not report it. */
   precipProb?: number
+  /** Precipitation rate for this hour (mm/h); absent when unreported. */
+  precipitation?: number
+  /** Convective part of {@link precipitation} (mm/h) — 阵性. */
+  showers?: number
+  /** Snowfall rate for this hour (cm/h, water equivalent). */
+  snowfall?: number
+  /** CAPE (J/kg) at this hour — instability context, never proof of thunder. */
+  cape?: number
   /** Whether the hour is daylight (derived from the feed's `is_day`). */
   isDay: boolean
   /** Sustained wind speed at this hour (km/h). */
@@ -145,6 +182,12 @@ export interface DailyPoint {
   precipProb?: number
   /** Total precipitation for the day (mm). */
   precipSum?: number
+  /**
+   * Total snowfall for the day (cm of fresh snow). GB/T 28592-2012 grades snow by
+   * the WATER EQUIVALENT of solid snow only, so this is converted with
+   * {@link SNOW_CM_PER_MM_WE} before it is graded.
+   */
+  snowfallSum?: number
 }
 
 export interface WeatherData {
@@ -222,7 +265,7 @@ function scanRain(steps: MinutelyPoint[], elapsedInFirstStep = 0): RainScan {
       rainingNow: true,
       // The current step may already be partly over; do not claim rain for the
       // full 15 minutes of a step whose dry part has not happened yet.
-      durationMinutes: Math.max(0, end * MINUTE_STEP_MIN - elapsedInFirstStep),
+      durationMinutes: Math.max(0, Math.round(end * MINUTE_STEP_MIN - elapsedInFirstStep)),
       windowMinutes,
     }
   }
@@ -838,9 +881,20 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       'visibility',
       'dew_point_2m',
       'precipitation',
+      // The evidence behind every description this plugin writes. `weather_code`
+      // is a lumped category derived from these by the provider; carrying the
+      // inputs lets the UI classify by the standard that owns each quantity
+      // (rain rate, showers-vs-rain, snowfall, instability) instead of
+      // reverse-engineering conclusions out of one integer.
+      'rain',
+      'showers',
+      'snowfall',
+      'cape',
+      'lifted_index',
+      'freezing_level_height',
     ].join(','),
-    hourly: 'temperature_2m,weather_code,is_day,precipitation_probability,wind_speed_10m',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max,precipitation_sum',
+    hourly: 'temperature_2m,weather_code,is_day,precipitation_probability,wind_speed_10m,precipitation,showers,snowfall,cape',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max,precipitation_sum,snowfall_sum',
     minutely_15: 'precipitation',
     timezone: 'auto',
     forecast_days: String(FORECAST_DAYS),
@@ -879,6 +933,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       visibility?: number | null
       dew_point_2m?: number | null
       precipitation?: number | null
+      rain?: number | null
+      showers?: number | null
+      snowfall?: number | null
+      cape?: number | null
+      lifted_index?: number | null
+      freezing_level_height?: number | null
     }
     hourly?: {
       time?: string[]
@@ -887,6 +947,10 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       is_day?: (number | null)[]
       precipitation_probability?: (number | null)[]
       wind_speed_10m?: (number | null)[]
+      precipitation?: (number | null)[]
+      showers?: (number | null)[]
+      snowfall?: (number | null)[]
+      cape?: (number | null)[]
     }
     daily?: {
       time?: string[]
@@ -898,6 +962,7 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       sunset?: string[]
       uv_index_max?: (number | null)[]
       precipitation_sum?: (number | null)[]
+      snowfall_sum?: (number | null)[]
     }
     minutely_15?: {
       time?: string[]
@@ -991,6 +1056,10 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
   const precipRate = current.precipitation === null || current.precipitation === undefined
     ? undefined
     : (current.precipitation * 3600) / precipIntervalS
+  // `rain` / `showers` are accumulations over the same interval, so they take the
+  // same conversion. A null `showers` is NOT zero: absence stays absence.
+  const partRate = (value: number | null | undefined): number | undefined =>
+    value === null || value === undefined ? undefined : (value * 3600) / precipIntervalS
 
   return {
     location,
@@ -1013,6 +1082,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
         : current.visibility / 1000,
       dewPoint: current.dew_point_2m ?? undefined,
       precipitation: precipRate,
+      rain: partRate(current.rain),
+      showers: partRate(current.showers),
+      snowfall: current.snowfall ?? undefined,
+      cape: current.cape ?? undefined,
+      liftedIndex: current.lifted_index ?? undefined,
+      freezingLevel: current.freezing_level_height ?? undefined,
     },
     // Missing values stay absent (`?? undefined`, never `?? 0`): the feed is
     // allowed to omit a step, and a fabricated 0 plotted as "0 °C" or "降水 0%"
@@ -1024,6 +1099,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       isDay: (hourIsDay[hourlyFrom + index] ?? 1) === 1,
       precipProb: hourly?.precipitation_probability?.[hourlyFrom + index] ?? undefined,
       windSpeed: hourly?.wind_speed_10m?.[hourlyFrom + index] ?? undefined,
+      // Hourly precipitation is already an hourly accumulation, i.e. mm/h — the
+      // interval normalization above applies to the `current` block only.
+      precipitation: hourly?.precipitation?.[hourlyFrom + index] ?? undefined,
+      showers: hourly?.showers?.[hourlyFrom + index] ?? undefined,
+      snowfall: hourly?.snowfall?.[hourlyFrom + index] ?? undefined,
+      cape: hourly?.cape?.[hourlyFrom + index] ?? undefined,
     })),
     daily: (daily?.time ?? []).slice(0, FORECAST_DAYS).map((date, index) => ({
       date,
@@ -1032,6 +1113,7 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
       tempMin: daily?.temperature_2m_min?.[index] ?? undefined,
       precipProb: daily?.precipitation_probability_max?.[index] ?? undefined,
       precipSum: daily?.precipitation_sum?.[index] ?? undefined,
+      snowfallSum: daily?.snowfall_sum?.[index] ?? undefined,
     })),
     sunrise: daily?.sunrise?.[0],
     sunset: daily?.sunset?.[0],
@@ -1055,26 +1137,36 @@ const LEAD_HOURS = 12
 
 /**
  * How hard a condition is actually hitting, which a WMO code alone never says.
- * `danger` is deliberately hard to reach: it is reserved for hail, a violent
- * shower, 暴雨-rate rain, Bft-10 wind, Bft-12 gusts and 40 °C heat, so the red
+ * `danger` is deliberately hard to reach: it takes evidence — a violent shower
+ * (82), a 暴雨 rain rate, Bft-10 wind, Bft-12 gusts or 40 °C heat — so the red
  * banner keeps meaning something. Ordinary thunder, 大雨 and 大雪 are
- * `warning`s, and a code whose measured intensity stays light is `info` — the
- * level that raises no alert at all.
+ * `warning`s, and a code whose intensity stays light is `info` — the level that
+ * raises no alert at all.
  */
 export type AlertSeverity = 'info' | 'warning' | 'danger'
 
-/** WMO 96/99 carry hail; 82 is a violent shower — those three are the codes
- * that are hazardous on their own. Everything else needs measured intensity. */
-const HAZARD_CODES = new Set([82, 96, 99])
-/** The hail-bearing subset of {@link HAZARD_CODES} — codes 96 and 99. */
+/**
+ * The one code that is hazardous on its own: 82 is a violent shower, which is
+ * exactly what 暴雨 means.
+ *
+ * Codes 96/99 (hail) are deliberately NOT here even though the WMO table names
+ * hail in them. Open-Meteo derives them from model convective parameters, and
+ * they fire far more often than hail reaches the ground — 天河区 2026-09-22
+ * 15:30 was code 96 on 0.8 mm of rain and a 37 km/h gust. A hail code is a model
+ * CATEGORY, not a hail OBSERVATION, so it climbs to `danger` the same way every
+ * other code does: on the rain rate or the gust.
+ */
+const HAZARD_CODES = new Set([82])
+/** The hail-bearing codes (96/99) — reported as a possibility, never as fact. */
 const HAIL_CODES = new Set([96, 99])
 
 /**
  * Classify ONE weather code (plus the intensity evidence around it) on the
- * severity scale. Codes 96/99 carry hail and are dangerous on their own; so is
- * a violent shower (82), which is exactly what 暴雨 means. A plain 95 (an
- * ordinary — usually brief — thunderstorm) or a plain 65 (大雨) is only a
- * warning unless the measured rate or gusts say otherwise.
+ * severity scale. A violent shower (82) is dangerous on its own; so is any code
+ * whose measured rate or gust clears the danger line. Everything else is a
+ * `warning` at most — a plain 95 (an ordinary, usually brief thunderstorm) is a
+ * 雷阵雨, and a hail code over light rain is a 雷雨 that may or may not produce
+ * hail at your location.
  * @param code
  * @param precipitation - precipitation rate at the same moment (mm/h), absent
  *   when the feed did not report it — the magnitude checks are then skipped
@@ -1089,7 +1181,7 @@ export function severityOfCode(code: number, precipitation?: number, gustKmh?: n
   if (!hazard && !thunder && !heavyRain && !heavySnow) return 'info'
   const rate = precipitation !== undefined && Number.isFinite(precipitation) ? precipitation : undefined
   const gust = gustKmh !== undefined && Number.isFinite(gustKmh) ? gustKmh : undefined
-  if (rate !== undefined && rate >= RAIN_DANGER_MMH) return 'danger'
+  if (rate !== undefined && rate >= RAIN_TORRENTIAL_MMH) return 'danger'
   if (gust !== undefined && gust >= GUST_DANGER_KMH) return 'danger'
   if (hazard) return 'danger'
   if (thunder) return 'warning'
@@ -1097,6 +1189,32 @@ export function severityOfCode(code: number, precipitation?: number, gustKmh?: n
   // Heavy snow: the code says 大雪/强阵雪, the rate says how much is landing —
   // with no rate reported, trust the code rather than dropping the warning.
   return rate === undefined || rate >= SNOW_WARN_MMH ? 'warning' : 'info'
+}
+
+/**
+ * The number a rain claim rests on, for a detail line: `（降水率 3.4 mm/h）`.
+ * Empty when the feed reported no rate — an alert then says only what the code
+ * names instead of inventing a figure to sound precise.
+ */
+function rainRateNote(rate: number | undefined): string {
+  return rate === undefined ? '' : `（降水率 ${rate.toFixed(1)} mm/h）`
+}
+
+/**
+ * The measurement a thunder alert rests on, in the order {@link severityOfCode}
+ * checked it: the 暴雨 rain rate first, then the Bft-12 gust. Only the criterion
+ * that actually FIRED is quoted — appending whichever number happens to be
+ * present would put `（降水率 0.5 mm/h）` under a gust-driven danger banner, i.e.
+ * a detail line contradicting its own title.
+ */
+function thunderEvidenceNote(
+  rate: number | undefined,
+  gustKmh: number | undefined,
+  windFmt: (kmh: number) => string,
+): string {
+  if (rate !== undefined && rate >= RAIN_TORRENTIAL_MMH) return rainRateNote(rate)
+  if (gustKmh !== undefined && gustKmh >= GUST_DANGER_KMH) return `（阵风 ${windFmt(gustKmh)}）`
+  return ''
 }
 
 /**
@@ -1117,10 +1235,11 @@ export function severityOfCode(code: number, precipitation?: number, gustKmh?: n
  *
  * Severity is calibrated by {@link severityOfCode} plus the temperature/wind
  * thresholds in condition.ts, never by the WMO code alone: 95 alone is a
- * 雷阵雨 warning, and only hail, a violent shower, 暴雨-rate rain, Bft-10+ wind,
- * Bft-12 gusts or 40 °C heat reach `danger`. Alert titles therefore name what
- * was measured — an ordinary thunderstorm is never announced as a 雷暴, and
- * "暴雨" is never claimed for a plain 大雨.
+ * 雷阵雨 warning, and only a violent shower, 暴雨-rate rain, Bft-10+ wind,
+ * Bft-12 gusts or 40 °C heat reach `danger`. Alert titles name the code's own
+ * category, and every intensity claim carries the number behind it — an ordinary
+ * thunderstorm is never announced as a 雷暴, "暴雨" is never claimed for a plain
+ * 大雨, and hail is never announced at all (see {@link HAIL_CODES}).
  *
  * Values are metric (°C / km/h); `fmt` renders temperatures and `windFmt`
  * renders wind speeds in the active display unit so the alert text never mixes
@@ -1139,6 +1258,10 @@ export function evaluateAlerts(
   const hasKey = (key: string): boolean => alerts.some((alert) => alert.key === key)
   const current = data.current
   const curSeverity = severityOfCode(current.weatherCode, current.precipitation, current.windGusts)
+  // The same evidence severityOfCode saw, reused so a detail line can quote the
+  // number a rain/storm claim rests on — and never quotes one the severity check
+  // rejected as missing or NaN.
+  const rainRate = Number.isFinite(current.precipitation) ? current.precipitation : undefined
 
   if (current.temperature >= HEAT_DANGER_C) {
     alerts.push({ key: 'heat', level: 'danger', title: '酷热', detail: `当前 ${fmt(current.temperature)}，减少外出，谨防中暑` })
@@ -1177,30 +1300,60 @@ export function evaluateAlerts(
 
   // Precipitation family. Each branch reports the condition the code names and
   // escalates only on measured intensity — code 65 is "大雨", never "暴雨", and
-  // code 95 on its own is a 雷阵雨. The title names the worst thing actually
-  // present (hail > Bft-12 gust > 暴雨-rate rain), so it never overstates.
+  // code 95 on its own is a 雷阵雨.
   if (curSeverity !== 'info') {
     const code = current.weatherCode
     const hail = HAIL_CODES.has(code)
     const gale = gustKmh !== undefined && gustKmh >= GUST_DANGER_KMH
+    // 暴雨 is a rain-RATE claim, so it is named only when a measured rate reached
+    // the 暴雨 line. Code 82 is a violent shower — dangerous by its own category,
+    // but a shower is not 暴雨, so it keeps its own name.
+    const deluge = rainRate !== undefined && rainRate >= RAIN_TORRENTIAL_MMH
     if (hail || (gale && THUNDER_CODES.has(code))) {
       alerts.push({
         key: 'thunder',
-        level: 'danger',
-        title: '强对流',
-        detail: hail ? '雷电伴冰雹，注意防范' : '雷雨伴强阵风，注意防范',
+        level: curSeverity,
+        title: curSeverity === 'danger' ? '强雷雨' : '雷雨',
+        // The old wording here read "强对流：雷电伴冰雹" for any 96/99 — a
+        // severity class plus a hail report, neither of them supported by the
+        // feed. Hail stays a POSSIBILITY (it is what the code means, not
+        // something a model grid observed), and the danger level now has to come
+        // from the measured rate or gust underneath it.
+        detail: hail
+          ? `天气码提示雷雨${thunderEvidenceNote(rainRate, gustKmh, windFmt)}，注意防范`
+          : '雷雨伴强阵风，注意防范',
       })
     } else if (HEAVY_RAIN_CODES.has(code)) {
       // 82 (violent shower) is danger by code, 65 (大雨) only by measured rate.
       alerts.push(curSeverity === 'danger'
-        ? { key: 'heavy-rain', level: 'danger', title: '暴雨', detail: '降雨强度大，注意出行安全与积水' }
+        ? {
+            key: 'heavy-rain',
+            level: 'danger',
+            title: deluge ? '暴雨' : '暴阵雨',
+            detail: `降雨强度大${deluge ? rainRateNote(rainRate) : ''}，注意出行安全与积水`,
+          }
         : { key: 'heavy-rain', level: 'warning', title: '大雨', detail: '雨势较大，注意出行安全' })
     } else if (THUNDER_CODES.has(code)) {
       alerts.push(curSeverity === 'danger'
-        ? { key: 'thunder', level: 'danger', title: '雷雨', detail: '雷电伴强降雨，注意防范' }
+        ? { key: 'thunder', level: 'danger', title: '雷雨', detail: `雷电伴强降雨${thunderEvidenceNote(rainRate, gustKmh, windFmt)}，注意防范` }
         : { key: 'thunder', level: 'warning', title: '雷阵雨', detail: '有雷电活动，注意避雨' })
     } else {
       alerts.push({ key: 'heavy-snow', level: 'warning', title: '强降雪', detail: '降雪明显，注意路况' })
+    }
+  }
+
+  // 短历时暴雨（中国气象局令第 16 号）：一小时一小时地看，永远看不出「每小时 10 mm
+  // 连下六小时」这种摊平型暴雨 —— 每一小时都到不了 20 mm/h 的短时强降水线，可 6 小时
+  // 累计 60 mm 已经是暴雨黄色预警的量。窗口从「现在所在的那个小时」起算。
+  if (!hasKey('heavy-rain')) {
+    const deluge = shortDurationDeluge(data.hourly.map((hour) => hour.precipitation))
+    if (deluge !== undefined) {
+      alerts.push({
+        key: 'heavy-rain',
+        level: deluge.level,
+        title: '暴雨',
+        detail: `未来 ${deluge.hours} 小时累计降雨量 ${deluge.sumMm.toFixed(1)} mm，达${deluge.signal}标准（≥ ${deluge.thresholdMm} mm）`,
+      })
     }
   }
 
