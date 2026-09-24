@@ -1,7 +1,5 @@
 /**
- * 每日天气简报 switch and the two `HH:MM` time pickers. Owns the optimistic
- * clock draft, because the draft and the selects that consume it live and die
- * together.
+ * 每日天气简报 switch and the two `HH:MM` time pickers; owns the optimistic clock draft, which lives and dies with the selects that consume it.
  */
 import { useCallback, useEffect, useId, useState, type ReactElement } from 'react'
 import { parseClockTime, type WeatherConfig } from '../config-shared'
@@ -21,16 +19,16 @@ export function BriefSection(props: {
   const { effective, set, commit, notify, permission, onRequestPermission } = props
   const ids = useId()
   /**
-   * Optimistic draft for the two brief times. Both selects are controlled by the
-   * stored config, so a pick would visibly snap back for a whole write round trip
-   * — and stay reverted forever when the write is refused (a stale revision fence
-   * the scoped transport cannot refresh). The draft keeps the user's own choice on
-   * screen until the snapshot catches up with it.
+   * Optimistic draft for the two brief times: both selects are controlled by the stored config, so a pick
+   * would snap back for a whole write round trip and stay reverted when the write is refused. The draft
+   * keeps the user's choice on screen until the snapshot catches up.
    */
   const [clockDraft, setClockDraft] = useState<Partial<Record<ClockFieldName, string>>>({})
 
-  /** Retract one clock draft, so the control falls back to the stored value.
-   * `expected` guards against dropping a newer pick that already replaced it. */
+  /**
+   * Retract one clock draft, so the control falls back to the stored value.
+   * `expected` guards against dropping a newer pick that already replaced it.
+   */
   const dropClockDraft = useCallback((field: ClockFieldName, expected?: string): void => {
     setClockDraft((prev) => {
       if (prev[field] === undefined || (expected !== undefined && prev[field] !== expected)) return prev
@@ -40,9 +38,8 @@ export function BriefSection(props: {
     })
   }, [])
 
-  // Retire each clock draft once the stored config has caught up with it (the
-  // write landed), keeping only the ones still waiting. Returning the previous
-  // object when nothing changed keeps this from re-rendering on every sync.
+  // Retire each clock draft once the stored config has caught up, keeping only the pending ones.
+  // Returning the previous object when nothing changed avoids a re-render on every sync.
   useEffect(() => {
     setClockDraft((prev) => {
       const next: Partial<Record<ClockFieldName, string>> = {}
@@ -56,9 +53,10 @@ export function BriefSection(props: {
     })
   }, [effective.briefMorning, effective.briefEvening])
 
-  /** Commit a `<select>`-picked clock time only when it parses to `HH:MM`. The
-   * pick is echoed immediately and retracted if the write does not land, so the
-   * control never reads as "my choice was ignored". */
+  /**
+   * Commit a picked clock time only when it parses to `HH:MM`; the pick is echoed immediately and
+   * retracted if the write does not land, so the control never reads as "my choice was ignored".
+   */
   const commitClockTime = (field: ClockFieldName, text: string): void => {
     const parsed = parseClockTime(text)
     if (parsed === undefined) {

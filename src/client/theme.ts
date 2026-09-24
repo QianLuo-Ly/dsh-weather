@@ -1,15 +1,7 @@
 /**
- * Shared design tokens and numeric style presets for the weather surfaces.
- *
- * This is the single source of truth for colors used by the client:
- * - {@link TOKEN} — var()-backed theme colors (flip with the harness theme).
- *   Plain fallbacks (the second var() argument) keep the plugin readable even
- *   when an alias token is absent. Text colors flip in dark mode via the
- *   document-wide `--dshw-*` variables injected by styles.ts.
- * - {@link PALETTE} — fixed weather colors (sun/rain ramp) that intentionally
- *   do not follow the theme.
- * - {@link BANNER} — translucent warning/danger banner palettes.
- * Components must import these instead of re-spelling hex literals.
+ * Shared design tokens and numeric presets for the weather surfaces: TOKEN
+ * (var()-backed theme colors), PALETTE (fixed weather colors), BANNER
+ * (translucent alert palettes). Components import these, never hex literals.
  */
 import type { CSSProperties } from 'react'
 
@@ -17,9 +9,8 @@ export const TOKEN = {
   bg: 'var(--dsw-alias-bg-layer-2, #f3f4f6)',
   /**
    * Soft/inset surface. NOT a bg-layer token: the host binds layer-1/2/3 to the
-   * SAME colour (pure white in light mode), so a layer-3 fill is invisible on the
-   * header and — because `brightness()` cannot lift a clamped white — leaves the
-   * chip with no hover feedback. The interactive token is a real tint.
+   * same colour (pure white in light mode), which is invisible on the header and
+   * gives no hover feedback since brightness() cannot lift a clamped white.
    */
   bgSoft: 'var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06))',
   /** Elevated surfaces above the base layer (inputs, dropdowns). */
@@ -31,10 +22,8 @@ export const TOKEN = {
   fgMuted: 'var(--dshw-fg-muted, #5f6672)',
   border: 'var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.12))',
   /**
-   * Accent. `--dsw-alias-brand-primary` is NOT an accent in this platform: the
-   * host binds it to the near-black (light) / near-white (dark) FOREGROUND, so
-   * every selected/active affordance rendered neutral. The platform's accent
-   * token is the `-new-colorprimary-new-color` alias.
+   * Accent. `--dsw-alias-brand-primary` is bound to the near-black/near-white
+   * FOREGROUND in this platform; the real accent token is `-new-colorprimary-new-color`.
    */
   accent: 'var(--dsw-alias-brand-primary-new-colorprimary-new-color, #4f8cff)',
   danger: '#e5484d',

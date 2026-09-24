@@ -1,9 +1,6 @@
 /**
- * dsh-weather — Host half.
- *
- * Registers the `weather` settings namespace through the Host settings
- * provider, so the browser half can persist and observe configuration
- * (visibility, location mode, manual coordinates, units, refresh interval)
+ * dsh-weather — Host half. Registers the `weather` settings namespace on the
+ * Host settings provider so the browser half can persist and observe config
  * through `ctx.settingsScope`. Everything else is a browser-half concern.
  */
 import type { Context } from '@deepseek-ai/cordis'
@@ -23,25 +20,10 @@ import {
 import type {} from './dsh-settings'
 
 /**
- * Settings schema for the `weather` namespace. Every bound derives from a
- * config-shared constant (REFRESH_RANGE / LAT_RANGE / LON_RANGE / MAX_* /
- * BRIEF_TIMES / CLOCK_TIME_PATTERN) so the Host validation, the client
- * fallback, the sanitizer and the settings UI can never drift apart.
- *
- * The schema must ACCEPT EVERYTHING A PREVIOUS VERSION OF THIS PLUGIN COULD HAVE
- * STORED. The provider resolves the stored section *during registration* and
- * rethrows a schema failure, which kills the inject fiber: the namespace is never
- * registered, the client's `sanitizeConfig` decode never runs, and the user's
- * entire configuration is orphaned (defaults shown, every write refused with
- * "namespace is not registered") — a far worse outcome than tolerating a stale
- * value. So:
- *   - array-entry coordinates are unbounded (a single bad entry would otherwise
- *     reject the whole section),
- *   - text fields carry no `.max()`: older versions stored `cityName` /
- *     `autoCityName` unbounded, and `sanitizeConfig` (which caps by the same
- *     measure the schema would) is the enforcement point on read and write,
- *   - `refreshMinutes` uses `.step(1)`: the stored value only has to be a sane
- *     number, and `sanitizeConfig` snaps it to the `REFRESH_RANGE.step` grid.
+ * Settings schema for the `weather` namespace. Bounds come from config-shared constants so Host validation,
+ * the client fallback, the sanitizer and the settings UI cannot drift. It must also accept anything an earlier
+ * version stored — a registration-time schema failure kills the inject fiber and orphans the stored config —
+ * so coordinates stay unbounded, text carries no `.max()`, `refreshMinutes` only `.step(1)`, and `sanitizeConfig` bounds it.
  */
 export const WeatherConfigSchema = z.object({
   enabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.enabled),
@@ -81,29 +63,17 @@ function errorText(error: unknown): string {
 }
 
 /**
- * Cordis plugin entry. The loader mounts this bundle from the profile's
- * `dsh.profile.bundles` layer stack (inserted by `cordis.patch.yml`).
- *
- * The registration call is feature-detected across the two shapes dsh-settings
- * has shipped inside this plugin's supported range:
- *   - current: `provider.installSection(owner, ns, schema, entry, hooks)`
- *   - older 0.1.x: a module-level `installSettingsSection(...)` (the provider has
- *     no such method; its typings expose only register/describe/get/update/
- *     replace/mutate).
- * Calling only the newer one throws `installSection is not a function` on an
- * older Host — inside `ctx.inject`, so the namespace silently never registers
- * and every setting degrades to process memory.
+ * Cordis plugin entry. The loader mounts this bundle from the profile's `dsh.profile.bundles` layer stack
+ * (inserted by `cordis.patch.yml`). Registration is feature-detected across the two registrar shapes in this
+ * plugin's supported range: current `provider.installSection(owner, ns, schema, entry, hooks)`, older 0.1.x a
+ * module-level `installSettingsSection`. Calling only the newer one throws inside `ctx.inject` and registers nothing.
  */
 export function apply(ctx: Context, config: WeatherConfig): void {
-  // The registration rides the settings provider's scope: while the service is
-  // present, our composition entry is the namespace's base layer. The browser
-  // half owns everything derived from the section; a committed change needs no
-  // re-registration here.
+  // The registration rides the settings provider's scope: our composition entry becomes the
+  // namespace's base layer. Everything derived from the section lives in the browser half.
   ctx.inject(['settings'], (settingsCtx) => {
-    // All change-driven behaviour lives in the browser half (it observes the
-    // namespace through its settingsScope); the Host has nothing to re-judge on
-    // attach/detach/change, hence the no-op hooks — they are part of the
-    // dsh-settings installSection contract, not dead configuration.
+    // Change-driven behaviour lives in the browser half; these no-op hooks exist because
+    // installSection requires them, not because the Host has anything to re-judge.
     const hooks = {
       setSource: () => {},
       onChange: () => {},
@@ -115,19 +85,14 @@ export function apply(ctx: Context, config: WeatherConfig): void {
       try {
         provider.installSection(ctx, WEATHER_NS, WeatherConfigSchema, config, hooks)
       } catch (error) {
-        // The provider resolves the stored section while registering and rethrows
-        // a failure. Letting that escape kills the inject fiber (and with it the
-        // plugin), so contain it: the namespace stays unavailable, but the rest of
-        // the plugin still loads and the settings page reports read-only.
-        // Logged, not swallowed — read-only settings with an empty log is
-        // undiagnosable from the outside.
+        // A registration-time schema failure would kill the inject fiber; contain it so the plugin
+        // still loads read-only — logged, not swallowed, or the failure is undiagnosable.
         ctx.logger?.warn?.('dsh-weather: 天气设置命名空间注册失败，本次以只读模式运行：%s', errorText(error))
       }
       return
     }
-    // Older provider: the registrar is a module-level export. Imported lazily so
-    // a Host that has already dropped it (or never shipped it) cannot break the
-    // plugin's activation.
+    // Older provider: the registrar is a module-level export, imported lazily so a Host
+    // that dropped it (or never shipped it) cannot break activation.
     void import('@deepseek-ai/dsh-settings')
       .then((mod) => {
         const legacy = (mod as unknown as {
@@ -139,11 +104,8 @@ export function apply(ctx: Context, config: WeatherConfig): void {
         legacy(ctx, WEATHER_NS, WeatherConfigSchema, config, hooks)
       })
       .catch((error: unknown) => {
-        // Neither shape exists on this Host: the plugin still loads, the
-        // settings namespace is simply unavailable (the client half then falls
-        // back to its in-memory defaults and the settings page reports read-only).
-        // Diagnosis matters here: this is the path taken when the Host is older
-        // (or newer) than either registrar this plugin knows.
+        // Neither registrar exists on this Host: settings are unavailable (the client half falls
+        // back to in-memory defaults and the page reads read-only). Worth logging to tell it apart.
         ctx.logger?.warn?.('dsh-weather: 该 Host 无可用的设置注册接口，设置页为只读：%s', errorText(error))
       })
   })

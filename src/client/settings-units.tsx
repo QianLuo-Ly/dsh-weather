@@ -1,6 +1,5 @@
 /**
- * Temperature unit and refresh interval. Owns the refresh-interval draft, so a
- * slider drag never fires a settings write per pixel.
+ * Temperature unit and refresh interval; owns the refresh draft so a slider drag never fires a write per pixel.
  */
 import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { REFRESH_RANGE, type WeatherConfig } from '../config-shared'

@@ -1,6 +1,5 @@
 /**
- * 定位方式 block: the auto/manual radios, the manual location editor (city
- * search + coordinate and display-name drafts) and the saved-city list.
+ * 定位方式 block: auto/manual radios, the manual location editor (city search + coordinate and name drafts) and the saved-city list.
  */
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
 import { LAT_RANGE, LON_RANGE, MAX_NAME_LENGTH, type WeatherConfig } from '../config-shared'
@@ -26,16 +25,7 @@ export function LocationSection(props: {
 
   const clearNotice = (): void => setNotice(null)
 
-  // Seed drafts from the stored config, but only the field that actually
-  // changed — a commit (or a city search) updates its own input without
-  // clobbering another input's uncommitted draft.
-  //
-  // The FIRST run must seed unconditionally. This block mounts only when the
-  // settings panel is opened, long after the namespace resolved, so the stored
-  // coordinates are already present on the very first render: a change-detecting
-  // ref initialised from that same render can never observe a difference, which
-  // left 纬度/经度 rendering EMPTY for an existing manual location — and a bare
-  // focus+blur on an empty field then wrote a clear, wiping the coordinate.
+  // Seed drafts from the stored config, but only the field that changed — a commit or city search updates its own input without clobbering another's draft. The first run seeds unconditionally because this block mounts only after the namespace resolved, so a change-detecting ref would leave 纬度/经度 empty and focus+blur would wipe them.
   const prevCoordsRef = useRef({ lat: effective.latitude, lon: effective.longitude })
   const coordsSeededRef = useRef(false)
   useEffect(() => {
@@ -51,9 +41,10 @@ export function LocationSection(props: {
     setNameInput(effective.cityName ?? '')
   }, [effective.cityName])
 
-  /** Commit a coordinate draft after validation (blur / Enter). A bad parse
-   * (`value === ''` from letters in a number input) is treated as invalid, not
-   * as "clear the coordinate". */
+  /**
+   * Commit a coordinate draft after validation (blur / Enter). A bad parse (`value === ''` from
+   * letters in a number input) is invalid, not a request to clear the coordinate.
+   */
   const commitCoordinate = (kind: 'latitude' | 'longitude', input: HTMLInputElement): void => {
     const range = kind === 'latitude' ? LAT_RANGE : LON_RANGE
     const label = kind === 'latitude' ? '纬度' : '经度'
@@ -68,10 +59,8 @@ export function LocationSection(props: {
     }
     const text = input.value.trim()
     if (text === '') {
-      // A blank field means "clear the coordinate" only when the user actually
-      // emptied it. An untouched blank field is a rendering/state artefact, and
-      // treating it as a deliberate clear would silently erase a stored
-      // coordinate — so restore the committed value instead of writing an unset.
+      // A blank field only means "clear" when the user emptied it; an untouched blank field is a
+      // rendering artefact, so restore the committed value instead of writing an unset.
       const stored = effective[kind]
       if (stored !== undefined) {
         revertDraft()
@@ -91,8 +80,10 @@ export function LocationSection(props: {
     commit([[kind, value]], ['activeSavedId'])
   }
 
-  /** Commit the display-name draft; renaming means custom coordinates, so the
-   * saved-city highlight is cleared too. */
+  /**
+   * Commit the display-name draft; renaming means custom coordinates, so the
+   * saved-city highlight is cleared too.
+   */
   const commitName = (input: HTMLInputElement): void => {
     const next = input.value.trim().slice(0, MAX_NAME_LENGTH)
     if (next === effective.cityName) return

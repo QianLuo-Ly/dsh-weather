@@ -1,8 +1,7 @@
 /**
- * Display-unit conversions. The weather feed is always fetched in metric
- * (°C / km/h / mm / hPa) — see fetchWeather in weather-api.ts — so the cached
- * payload is unit-independent and a unit toggle never re-fetches. Everything
- * user-facing converts here, keeping °F/mph ternaries out of the components.
+ * Display-unit conversions. The feed is always fetched in metric (°C / km/h / mm / hPa — see fetchWeather
+ * in weather-api.ts), so the cached payload is unit-independent and a unit toggle never re-fetches;
+ * user-facing values convert here, keeping °F/mph ternaries out of the components.
  */
 import type { WeatherConfig } from '../config-shared'
 
@@ -24,8 +23,8 @@ export function tempText(celsius: number, units: UnitSetting): string {
 }
 
 /**
- * Numeric temperature in the active unit — for charts that plot the value
- * itself. Without this, a caller can plot metric °C while labelling the axis °F.
+ * Numeric temperature in the active unit, for charts that plot the value itself — otherwise a caller
+ * can plot metric °C while labelling the axis °F.
  */
 export function tempNumber(celsius: number, units: UnitSetting): number {
   return units === 'fahrenheit' ? toFahrenheit(celsius) : celsius

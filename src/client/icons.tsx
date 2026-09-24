@@ -1,8 +1,7 @@
 /**
- * Weather icon set: Feather-style stroke SVGs keyed by WMO weather code and
- * day/night. Clouds, moon and snow follow `currentColor` so they adapt to the
- * theme; the sun, raindrops and lightning carry their own weather colors.
- * No gradients, no shared defs — safe to render many instances at once.
+ * Weather icon set: Feather-style stroke SVGs keyed by WMO code and day/night. Clouds, moon and snow follow
+ * `currentColor` to adapt to the theme; sun, raindrops and lightning carry their own colors. No gradients or
+ * shared defs, so many instances render safely.
  */
 import { Fragment, type ReactElement } from 'react'
 import { PALETTE } from './theme'
@@ -222,8 +221,8 @@ const GLYPH_NODES: Record<SkyGlyph, ReactElement> = {
   'partly-day': <CloudSun />,
   'partly-night': <CloudMoon />,
   cloudy: <Cloud />,
-  // 轻雾与霾共用雾的图形：两者都是「能见度下降」，区分靠标签与 basis 里的湿度，
-  // 与 Drizzle 同时代表毛毛雨/细雨是同一个取舍。
+  // Fog and haze share the fog glyph — both are reduced visibility; the label and the humidity in
+  // `basis` distinguish them, the same trade-off as Drizzle covering both drizzle and light rain.
   fog: <Fog />,
   drizzle: <Drizzle />,
   'rain-light': <RainLight />,
@@ -240,13 +239,9 @@ const GLYPH_NODES: Record<SkyGlyph, ReactElement> = {
 }
 
 /**
- * Render a weather icon for a {@link SkyGlyph}.
- *
- * The prop used to be a WMO code. It is now the glyph the description layer CHOSE,
- * because the icon has to agree with the sentence next to it: the code's 96/99 name
- * hail, and after the description layer stopped asserting hail (see describe.ts),
- * an icon with hail pellets under a 「雷雨」 label would be the same overstatement
- * in picture form. The hail glyph is gone with it.
+ * Render a weather icon for a {@link SkyGlyph} — the glyph the description layer chose, so picture and
+ * sentence agree. WMO 96/99 name hail, but after `describe.ts` stopped asserting hail a hail glyph under a
+ * 「雷雨」 label would overstate it; the hail glyph is gone.
  */
 export function WeatherIcon(props: { glyph: SkyGlyph; size?: number }): ReactElement {
   const { glyph, size = 24 } = props

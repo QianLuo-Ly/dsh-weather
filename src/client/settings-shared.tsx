@@ -1,14 +1,10 @@
 /**
- * Shared primitives for the weather settings page: the design-token aliases,
- * the `Row` / `ClockField` controls, their inline styles and the callback types
- * every settings section receives.
- *
- * No settings state lives here. This module exists so the sections
- * (`settings-location`, `settings-brief`, …) share one definition of "a row"
- * instead of each re-declaring the page's look.
+ * Shared primitives for the settings page — design-token aliases, the `Row` / `ClockField` controls, their
+ * inline styles and the callback types. Holds no settings state; the sections share one definition of "a row".
  */
 import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
 import { BRIEF_TIMES, parseClockTime, type WeatherConfig } from '../config-shared'
+import { pad2 } from './format'
 import type { NoticeKind } from './hooks'
 import { SHADOW, TOKEN } from './theme'
 
@@ -51,20 +47,14 @@ const row: CSSProperties = {
 }
 
 /** Hour choices `00`–`23`. */
-const CLOCK_HOURS = Array.from({ length: 24 }, (_, index) => String(index).padStart(2, '0'))
+const CLOCK_HOURS = Array.from({ length: 24 }, (_, index) => pad2(index))
 /** Minute choices in five-minute steps — the granularity a brief actually needs. */
-const CLOCK_MINUTES = Array.from({ length: 12 }, (_, index) => String(index * 5).padStart(2, '0'))
+const CLOCK_MINUTES = Array.from({ length: 12 }, (_, index) => pad2(index * 5))
 
 /**
- * Pick an `HH:MM` time from two styled selects.
- *
- * A native `<input type="time">` was the only control in this page whose chrome
- * the plugin could not touch: its own clock affordance and spinner popup ignore
- * the design tokens, read as a stray browser widget next to the rest of the
- * form, and on some platforms are awkward to drive at all. Two selects render
- * with the page's own input styling and are unambiguous to operate. A stored
- * minute that is not a multiple of five is added to the list rather than
- * silently rewritten, so hand-edited documents round-trip unchanged.
+ * Pick an `HH:MM` time from two styled selects. A native `<input type="time">` carries browser chrome that
+ * ignores the design tokens; two selects match the form. A stored minute that is not a multiple of five is
+ * appended to the list rather than rewritten, so hand-edited documents round-trip.
  */
 export function ClockField(props: {
   id: string
@@ -159,9 +149,7 @@ export const inputButton: CSSProperties = {
 }
 
 // ── City picker ─────────────────────────────────────────────────────────────
-// Positioning and the two-line result layout ride inline styles; hover and
-// keyboard-active states live in the injected stylesheet (`dshw-ac-*`), since
-// inline styles cannot express pseudo-classes or attribute selectors.
+// Layout rides inline styles; hover / keyboard-active states live in the injected `dshw-ac-*` stylesheet — inline styles cannot express pseudo-classes.
 
 export const searchingBadge: CSSProperties = {
   position: 'absolute',
@@ -269,10 +257,8 @@ export const suggestionStar: CSSProperties = {
 }
 
 /**
- * Browser notification permission, re-read on focus because it can change in the
- * browser's own site settings while this page stays open. The page holds it
- * (rather than each block) because the alerts switch and the brief switch both
- * show the same hint.
+ * Browser notification permission, re-read on focus because it can change in the browser's site settings while
+ * the page stays open. Held by the page because the alerts and brief switches both show the same hint.
  */
 export function useNotificationPermission(): { permission: NotificationPermission; request: () => void } {
   const [permission, setPermission] = useState<NotificationPermission>(() => (

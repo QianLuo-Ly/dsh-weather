@@ -1,6 +1,6 @@
 {
   "name": "dsh-weather",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "description": "DSH Web 会话顶栏的天气插件：当前天气 + 实时日期时间 + 未来预报（含逐日详情）+ 多城市收藏 + 每日简报（Open-Meteo 数据源，无需 API key）。",
   "homepage": "https://github.com/QianLuo-Ly/dsh-weather",
   "repository": {
@@ -34,7 +34,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
     "check": "npm run typecheck && npm run check:encoding && npm run build && npm run verify && npm run check:lib-sync",
-    "verify": "node scripts/verify-bundle.cjs && node scripts/verify-features.cjs && node scripts/smoke-client.cjs",
+    "verify": "node scripts/verify-bundle.cjs && node scripts/verify-features.cjs && node scripts/verify-units.cjs && node scripts/smoke-client.cjs",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:lib-sync": "node scripts/check-lib-sync.mjs"
   },
@@ -63,7 +63,7 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.0",
-    "@deepseek-ai/dsh-settings": ">=0.1.2-alpha.2 <0.2.0-0",
+    "@deepseek-ai/dsh-settings": ">=0.1.1-rc.2 <0.2.0-0",
     "@deepseek-ai/schemastery": "^3.18.0"
   },
   "devDependencies": {

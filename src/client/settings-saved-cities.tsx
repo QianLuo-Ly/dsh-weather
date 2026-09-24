@@ -1,10 +1,10 @@
 /**
- * Saved-city list: the ＋收藏当前位置 action and one row per stored city
- * (switch / two-step delete). The list itself and all writes live in
- * `useSavedLocations`; this module is the view over it.
+ * Saved-city list: the ＋收藏当前位置 action and one row per stored city (switch / two-step delete). All state
+ * and writes live in `useSavedLocations`; this module is only the view over it.
  */
 import { useState, type ReactElement } from 'react'
 import { MAX_SAVED_LOCATIONS } from '../config-shared'
+import { CURRENT_LOCATION_LABEL } from './geolocation'
 import type { SavedLocationsState } from './hooks'
 import { ACCENT, BG_ROW, BORDER, DANGER, INPUT_BG, MUTED, inputButton } from './settings-shared'
 
@@ -24,12 +24,12 @@ export function SavedCitiesList(props: { savedCities: SavedLocationsState }): Re
           title={atSavedLimit ? `最多收藏 ${MAX_SAVED_LOCATIONS} 个城市` : undefined}
           style={{ ...inputButton, padding: '5px 12px', fontSize: 12.5, ...(atSavedLimit ? { opacity: 0.5, cursor: 'not-allowed' } : {}) }}
         >
-          ＋ 收藏当前位置
+          {`＋ 收藏${CURRENT_LOCATION_LABEL}`}
         </button>
       </div>
       {savedCities.saved.length === 0 ? (
         <div style={{ color: MUTED, fontSize: 12 }}>
-          还没有收藏城市——搜索城市后点 ☆ 收藏，或收藏当前位置。
+          {`还没有收藏城市——搜索城市后点 ☆ 收藏，或收藏${CURRENT_LOCATION_LABEL}。`}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

@@ -1,22 +1,5 @@
 /**
- * Weather configuration page, registered into `settings.section`. Owns the
- * durable settings: visibility, location mode (auto / manual with city search),
- * saved cities, temperature unit, refresh interval and the daily-brief times.
- *
- * The page itself holds the two things every block needs — the resolved config
- * and the write discipline below — and composes one module per block:
- * `settings-toggles`, `settings-brief`, `settings-location` (which in turn uses
- * `settings-city-search` and `settings-saved-cities`), `settings-units`,
- * `settings-diagnostics`. Shared controls live in `settings-shared`.
- *
- * Write discipline:
- * - Text/number/range inputs keep a local draft and commit on blur / Enter /
- *   pointer-up, so typing never fires a settings RPC per keystroke (and a
- *   length-capped field cannot "eat" further keystrokes).
- * - Every write is verified by reading the snapshot back: the transport
- *   resolves even when the Host rejects a value, so success is never assumed.
- * - Any edit that makes the displayed location stop being a saved city clears
- *   `activeSavedId`, so the chip/list highlight can never point at another city.
+ * Weather configuration page, registered into `settings.section`: visibility, location mode (auto / manual with city search), saved cities, temperature unit, refresh interval and brief times; composes one module per block. Edits draft locally and commit on blur / Enter / pointer-up, and every write is verified by reading the snapshot back — the transport resolves even when the Host refuses. An edit that leaves a saved city clears `activeSavedId`.
  */
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
@@ -30,9 +13,7 @@ import { UnitsSection } from './settings-units'
 import { DANGER, FG, MUTED, OK, useNotificationPermission, type FieldWriter, type Notify } from './settings-shared'
 
 /**
- * Replay an already-refused write on the unfenced path and return what the
- * authority actually holds. Supplied by the plugin entry (it needs the remote
- * service, which this view does not).
+ * Replay an already-refused write on the unfenced path; supplied by the plugin entry, which needs the remote service.
  */
 export interface WriteProbe {
   (fields: Array<[string, unknown]>, clears: string[]): Promise<
@@ -71,28 +52,10 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
   }, [scope])
 
   /**
-   * Issue one or more settings writes and verify the resulting snapshot — a
-   * Host refusal must surface as a notice, never as a silent no-op.
-   *
-   * `writeVerified` re-issues the batch once before reporting. When even that
-   * fails the refusal is not routine, and the transport has thrown away the
-   * reason (its contract settles a refused write like an accepted one), so the
-   * batch is replayed through `probe`: it writes on the unfenced path and
-   * returns the authority's own value.
-   *
-   * Rendering that returned value is the point of the fallback, not a detail.
-   * The scoped transport keeps a namespace's revision in step by folding each
-   * write answer into a shared mirror, and that mirror deliberately keeps its
-   * held view when a refresh fails (`settings-mirror.ts`: "the held view keeps
-   * serving"). A client whose revision no longer matches the Host's — the Host
-   * resets `registration.revision` to 0 whenever the plugin re-registers, e.g.
-   * on a `dsh web` restart — therefore keeps failing the fence, and its
-   * subscription never delivers the value it just stored. Reading the value
-   * back from the write answer is what makes the panel show the truth in that
-   * state instead of snapping back.
-   *
-   * @returns whether the authority now holds the requested state — a caller
-   *   with an optimistic draft uses this to keep or retract it.
+   * Issue one or more settings writes and verify the snapshot — a Host refusal must surface as a notice,
+   * never a silent no-op. `writeVerified` re-issues the batch once; if that still fails the batch is replayed
+   * through `probe`, which writes unfenced and returns the authority's own value. Resolves whether the
+   * authority now holds the requested state, so a caller with an optimistic draft can keep or retract it.
    */
   const commit: FieldWriter = useCallback((fields, clears = []) => {
     if (!scope.getSnapshot().writable) {

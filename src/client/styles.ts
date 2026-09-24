@@ -1,9 +1,7 @@
 /**
- * Tiny stylesheet injected once by the client plugin: the popover entrance
- * animation and the interaction states referenced by `className` in the
- * components. The plugin bundle has no CSS pipeline, so the styles live in an
- * injected `<style>` tag owned by this package (removed with the plugin's DOM
- * effects on unload).
+ * Tiny injected stylesheet: the popover entrance animation and the
+ * `className`-referenced interaction states. The plugin bundle has no CSS
+ * pipeline, so this `<style>` is owned by the package and removed on unload.
  */
 
 /** Rules of the `dsh-weather-styles` sheet, in source order. */
@@ -12,12 +10,8 @@ const STYLE_TEXT = [
   '  from { opacity: 0; transform: translateY(8px) scale(0.97); }',
   '  to { opacity: 1; transform: translateY(0) scale(1); }',
   '}',
-  // Plugin text colors: dark text on the light palette, PURE WHITE in dark
-  // mode (the harness marks dark mode with body[data-ds-dark-theme]).
-  // Defined document-wide (not under .dshw-root) so both the weather chip and
-  // the settings page (rendered inside the DSH Settings panel, outside the
-  // chip's root) resolve them. Direct colors avoid a var()-chain that would
-  // become guaranteed-invalid if an alias token were ever missing.
+  // Plugin text colors: dark on light, pure white under body[data-ds-dark-theme].
+  // Document-wide (not under .dshw-root) so the settings page resolves them too.
   ':root {',
   '  --dshw-fg: #1f2328;',
   '  --dshw-fg-muted: #5f6672;',
@@ -26,21 +20,13 @@ const STYLE_TEXT = [
   '  --dshw-fg: #ffffff;',
   '  --dshw-fg-muted: rgba(255, 255, 255, 0.8);',
   '}',
-  // The chip lives inside the conversation header, so hover only brightens —
-  // a translate would nudge the header row mid-layout. `filter` alone is not
-  // enough: the platform's light theme fills the surface with pure white, and
-  // no brightness multiplier can lift a clamped channel, so a real background
-  // tint carries the affordance.
+  // The chip sits in the conversation header, so hover only brightens — a
+  // translate would nudge the row. A real tint, since brightness() cannot lift white.
   '.dshw-bar { transition: filter 0.15s ease, background-color 0.15s ease; }',
   '.dshw-bar:hover { filter: brightness(1.08); background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06)); }',
   '.dshw-popover { animation: dshw-pop-in 0.15s ease; }',
   // ── City picker (settings page) ──────────────────────────────────────────
-  // Pseudo-classes cannot be expressed inline, so every interactive state of
-  // the suggestion list lives here. The active row is driven by keyboard
-  // navigation (aria-activedescendant), which is why it needs its own rule
-  // rather than relying on :hover. Both use the interactive tokens: the
-  // bg-layer tokens are pure white in light mode, which made the highlight
-  // invisible exactly where the keyboard path depends on seeing it.
+  // Interactive states that cannot be inline; the aria-activedescendant active row needs its own rule, not :hover.
   '.dshw-ac-panel { animation: dshw-pop-in 0.12s ease; }',
   '.dshw-ac-row { transition: background-color 0.1s ease; }',
   '.dshw-ac-row:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06)); }',
@@ -53,16 +39,14 @@ const STYLE_TEXT = [
   '  background: var(--dsw-alias-border-l3, rgba(0, 0, 0, 0.16));',
   '  border-radius: 4px;',
   '}',
-  // Keyboard focus was invisible on every control this plugin renders. Outline
-  // in `currentColor` so it follows whatever palette (light/dark, high
-  // contrast) the host applies, instead of pinning one accent color.
+  // Keyboard focus was invisible on every plugin control: outline in
+  // `currentColor` so it follows the host palette instead of one accent color.
   '.dshw-bar:focus-visible, .dshw-root button:focus-visible, .dshw-popover a:focus-visible,',
   '.dshw-ac-row:focus-visible, .dshw-ac-star:focus-visible {',
   '  outline: 2px solid currentColor;',
   '  outline-offset: 2px;',
   '}',
-  // The entrance animation and the hover transitions are decoration, not
-  // feedback, so they are dropped entirely for reduced-motion users.
+  // Entrance animation and hover transitions are decoration, dropped for reduced-motion.
   '@media (prefers-reduced-motion: reduce) {',
   '  .dshw-popover, .dshw-ac-panel { animation: none; }',
   '  .dshw-bar, .dshw-ac-row, .dshw-ac-star { transition: none; }',
@@ -70,14 +54,9 @@ const STYLE_TEXT = [
 ].join('\n')
 
 /**
- * Ensure the `dsh-weather-styles` stylesheet is present AND current.
- *
- * The content is rewritten on every activation rather than skipped when the tag
- * already exists: a plugin reload (HMR, or a rebuilt bundle pushed by the module
- * table) re-runs `apply` in the SAME document, so the previous sheet is still
- * there with the previous rules. Bailing out on its presence would silently pin
- * the old CSS — every rule added to this file would then only ever appear after
- * a full page refresh, which reads as "the style change did nothing".
+ * Ensure the `dsh-weather-styles` sheet is present AND current. A plugin reload
+ * re-runs in the same document with the old sheet still present, so bailing out
+ * on it would pin stale CSS until a full page refresh.
  */
 export function ensureWeatherStyles(): void {
   if (typeof document === 'undefined') return

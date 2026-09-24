@@ -1,7 +1,6 @@
 /**
- * 天气栏 / 恶劣天气提醒 switches. Owns the notification-permission hint both
- * switch rows share; the permission value itself is held by the page, because
- * the brief section shows the same hint.
+ * 天气栏 / 恶劣天气提醒 switches. Owns the notification-permission hint the switch rows share; the permission
+ * value itself is held by the page because the brief section shows the same hint.
  */
 import { useId, type ReactElement } from 'react'
 import type { WeatherConfig } from '../config-shared'

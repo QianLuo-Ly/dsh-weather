@@ -1,11 +1,7 @@
 /**
- * Local SlotMap augmentation for the seats dsh-weather registers into.
- *
- * The `conversation.session.header.actions` seat is declared by the running
- * shell's ui-conversation (a core bundle, always present at runtime), but it
- * is intentionally NOT a compile-time dependency of this plugin — adding it
- * would drag a full product package into devDependencies just for types.
- * Mirrors the augmentation pattern the core packages themselves use.
+ * Local SlotMap augmentation for the seats dsh-weather registers into. `conversation.session.header.actions`
+ * is declared by the shell's ui-conversation (always present at runtime) but is not a compile-time
+ * dependency — that would drag a full product package into devDependencies just for types.
  */
 import '@deepseek-ai/dsh-client-ui-slots'
 

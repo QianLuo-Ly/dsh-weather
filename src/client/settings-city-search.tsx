@@ -1,16 +1,12 @@
 /**
- * City search field: a debounced Open-Meteo geocoding lookup with a keyboard-
- * and pointer-driven suggestion dropdown, plus a ☆ toggle to save a result
- * without switching to it.
- *
- * All of the dropdown machinery (query, results, active row, outside-click
- * guard, debounce) is local here; the selected place is handed back through
- * `savedCities.selectPlace`.
+ * City search field: a debounced Open-Meteo geocoding lookup with a keyboard- and pointer-driven suggestion
+ * dropdown, plus a ☆ toggle to save a result without switching to it. The dropdown machinery (query, results,
+ * active row, outside-click guard, debounce) is local; the selected place is handed back through `savedCities.selectPlace`.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { MAX_NAME_LENGTH, MAX_SAVED_LOCATIONS, type WeatherConfig } from '../config-shared'
 import { Glyph } from './icons'
-import { searchCity, type GeoLocation } from './weather-api'
+import { searchCity, type GeoLocation } from './geolocation'
 import type { SavedLocationsState } from './hooks'
 import {
   ACCENT,
@@ -69,12 +65,11 @@ export function CitySearchField(props: {
     return () => document.removeEventListener('mousedown', onPointerDown)
   }, [suggestions.length])
 
-  // 250ms 防抖：避免每次击键都请求 Open-Meteo Geocoding。
+  // 250ms debounce: one Open-Meteo geocoding request per typing burst, not per keystroke.
   useEffect(() => {
     if (skipNextSearchRef.current) {
-      // Programmatic value (a picked result) — do not re-open the dropdown.
-      // The superseded run's cleanup set `cancelled`, so its `.finally` never
-      // cleared the flag; clear it here or "搜索中…" sticks until the next search.
+      // A picked result: skip the re-search. The superseded run's cleanup set `cancelled`, so
+      // its `.finally` never cleared the flag — clear it here or "搜索中…" sticks.
       skipNextSearchRef.current = false
       setSearching(false)
       return
@@ -100,8 +95,7 @@ export function CitySearchField(props: {
           }
         })
         .catch(() => {
-          // Distinguish a dead lookup from an empty one: clearing the list
-          // silently made a network failure look like "no such city".
+          // Distinguish a dead lookup from an empty one — "no such city" must not hide a network failure.
           if (!cancelled) {
             setSuggestions([])
             setSearchFailed(true)
@@ -116,18 +110,16 @@ export function CitySearchField(props: {
   }, [search])
 
   /**
-   * Adopt one search result as the manual location. Selecting a place means
-   * custom coordinates, so the hook writes coords+name in one batch and clears
-   * any active saved id.
+   * Adopt one search result as the manual location. Selecting a place means custom coordinates, so the hook
+   * writes coords+name in one batch and clears any active saved id.
    */
   const pickPlace = (place: GeoLocation): void => {
     savedCities.selectPlace(place)
-    // Skip the debounce re-search only when the text actually changes — a no-op
-    // setState would not run the effect and would leave the guard armed.
+    // Skip the debounce re-search only when the text changes — a no-op setState would not run
+    // the effect and would leave the guard armed.
     if (place.name !== search) {
       skipNextSearchRef.current = true
-      // Same budget as the input it feeds (`maxLength`), so a long qualified
-      // name cannot push a controlled value past the field's own limit.
+      // Same budget as the input's `maxLength`, so a long qualified name cannot exceed the field's limit.
       setSearch(place.name.slice(0, MAX_NAME_LENGTH))
     }
     setSuggestions([])
@@ -144,12 +136,10 @@ export function CitySearchField(props: {
           placeholder="输入城市名，如：北京 / Beijing"
           onChange={(event) => { onEdit(); setSearch(event.target.value); setActiveIndex(0) }}
           onKeyDown={(event) => {
-            // An IME confirming a candidate also delivers Enter (and, on
-            // some browsers, a 229 keyCode). Acting on those would replace
-            // the user's in-progress pinyin with whichever row is active.
+            // An IME confirming a candidate also delivers Enter (and a 229 keyCode on some
+            // browsers); acting on it would replace the in-progress pinyin with the active row.
             if (event.nativeEvent.isComposing || event.keyCode === 229) return
-            // Arrow keys drive the active row while focus stays in the
-            // input, so typing, picking and starring never fight for focus.
+            // Arrow keys drive the active row while focus stays in the input.
             if (event.key === 'Escape') { setSuggestions([]); return }
             if (suggestions.length === 0) return
             if (event.key === 'ArrowDown') {

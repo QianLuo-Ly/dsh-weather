@@ -1,28 +1,15 @@
 /**
- * Session-header weather chip. Registered into the app-reserved
- * `conversation.session.header.actions` seat (not a floating overlay), so it
- * sits in the conversation column's own chrome row and can never collide with
- * other plugins' floating controls (sidebars, whales, status pills…).
- *
- * Collapsed it is one compact chip — weather icon, temperature, condition and a
- * live date/time (minute-aligned clock) — always visible while a session is
- * open. Clicking it opens a popover (anchored to the chip) holding the location
- * header, the saved-city switcher, current-weather hero, stat chips, the 24h
- * temperature trend, the hourly strip, the 7-day forecast, per-day detail, and
- * the unit / refresh controls.
- *
- * All data & side-effect logic lives in hooks.ts (location + IP-drift, feed +
- * stale degrade, saved cities, daily brief, notifications, tab title, day
- * detail); this file is layout, interaction and derived display text.
- *
- * Display units are applied here via units.ts — the feed is metric, so a unit
- * toggle never re-fetches and a cached snapshot stays valid across switches.
+ * Session-header weather chip in the app-reserved
+ * `conversation.session.header.actions` seat (not a floating overlay). Layout
+ * and interaction only — data/side effects live in hooks.ts; units.ts converts.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactElement } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
 import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../config-shared'
-import { evaluateAlerts } from './weather-api'
-import { describeSky } from './describe'
+import { evaluateAlerts } from './alerts'
+import { CURRENT_LOCATION_LABEL } from './geolocation'
+import { compactDistance, msToNextMinute, pctText } from './format'
+import { describeSky, rainGrade24h, snowGrade24h } from './describe'
 import {
   aqiInfo,
   clockDate,
@@ -63,9 +50,17 @@ const POPOVER_MIN_WIDTH = 280
 const POPOVER_EDGE_GAP = 16
 
 /**
- * Live local clock driving the chip's date/time text. Self-contained so its
- * minute-aligned re-render never touches the (comparatively heavy) chart and
- * forecast subtrees of WeatherBar.
+ * Tab-order reachable controls. `[tabindex="-1"]` is excluded — the popover
+ * itself carries it (focused on open, not a Tab stop).
+ */
+const FOCUSABLE_SELECTOR = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+
+/** Grade labels that mean "nothing worth grading" — the amount is shown alone. */
+const UNGRADED_TOTALS = new Set(['微量', '无降水'])
+
+/**
+ * Self-contained minute-aligned clock, so its re-render never touches the
+ * chart / forecast subtrees.
  */
 function LiveClock(): ReactElement {
   const [now, setNow] = useState<Date>(() => new Date())
@@ -73,9 +68,9 @@ function LiveClock(): ReactElement {
     let timer = 0
     const refresh = (): void => {
       setNow(new Date())
-      timer = window.setTimeout(refresh, 60_000 - (Date.now() % 60_000) + 20)
+      timer = window.setTimeout(refresh, msToNextMinute())
     }
-    timer = window.setTimeout(refresh, 60_000 - (Date.now() % 60_000) + 20)
+    timer = window.setTimeout(refresh, msToNextMinute())
     return () => window.clearTimeout(timer)
   }, [])
   return (
@@ -89,18 +84,14 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const { scope } = props
   const [config, setConfig] = useState<WeatherConfig | undefined>(() => sanitizeConfig(scope.getSnapshot().value))
   const [open, setOpen] = useState(false)
-  // Popover geometry measured when the chip opens: which side to grow from and
-  // how wide it may be before touching the viewport edge.
   const [pop, setPop] = useState<{ align: 'start' | 'end'; width: number } | null>(null)
   const barRef = useRef<HTMLDivElement>(null)
   const chipRef = useRef<HTMLButtonElement>(null)
   const popoverRef = useRef<HTMLDivElement>(null)
   const popoverId = useId()
 
-  // Keep the config snapshot in sync with settings changes — normalized so a
-  // hand-edited or older settings document can never yield undefined/NaN
-  // fields. Snapshots are rebuilt objects, so an unchanged section keeps the
-  // previous reference (otherwise every unrelated snapshot re-renders us).
+  // Keep the config snapshot in sync with settings, normalized against a
+  // hand-edited/older document. Unchanged snapshots keep their reference.
   useEffect(() => {
     const sync = (): void => {
       const next = sanitizeConfig(scope.getSnapshot().value)
@@ -112,7 +103,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   const effective = config ?? DEFAULT_WEATHER_CONFIG
 
-  // Data & side effects.
   const { location, locating, error: locationError, relocate, driftNotice } = useAutoLocation({ scope, effective })
   const feed = useWeatherFeed({ effective, location })
   const saved = useSavedLocations({ scope, effective })
@@ -120,8 +110,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const writer = useConfigWriter(scope)
   const data = feed.data
   const name = placeNameOf(effective, location)
-  // The saved entry matching the displayed coordinates (null when the current
-  // location is custom/auto) — drives the ☆ toggle and the chip highlight.
+  // Saved entry matching the displayed coordinates (null for custom/auto) — drives ☆.
   const savedMatch = location === null
     ? undefined
     : saved.saved.find((entry) => placeKey(entry.latitude, entry.longitude) === placeKey(location.latitude, location.longitude))
@@ -136,8 +125,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   useDailyBrief({ effective, data, location, placeName: name, stale: feed.stale })
   useTabTitle({ effective, data, status, placeName: name })
 
-  // The transient toast under the chip: IP-drift switches and saved-city
-  // feedback share one slot.
+  // IP-drift switches and saved-city feedback share one toast slot.
   const toast = driftNotice ?? saved.notice
 
   const measurePopover = useCallback((): void => {
@@ -157,8 +145,31 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     if (restoreFocus && chipRef.current !== null) chipRef.current.focus()
   }, [])
 
-  // Toggle the popover. On open, measure the chip's viewport position once and
-  // let the popover grow from the side with more room.
+  /**
+   * Keep Tab inside the dialog while open: `aria-modal` makes assistive tech
+   * treat the page behind as inert, but Tab still walked out. Esc is the way out.
+   */
+  const onPopoverKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== 'Tab') return
+    const root = popoverRef.current
+    if (root === null) return
+    const focusables = Array.from(root.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+    if (first === undefined || last === undefined) return
+    const active = document.activeElement
+    if (event.shiftKey) {
+      // `root` is focused on open (tabIndex -1), so Shift+Tab from it wraps to the end.
+      if (active === first || active === root || active === null || !root.contains(active)) {
+        event.preventDefault()
+        last.focus()
+      }
+    } else if (active === last) {
+      event.preventDefault()
+      first.focus()
+    }
+  }
+
   const togglePopover = (): void => {
     const next = !open
     if (next) {
@@ -170,7 +181,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     setOpen(next)
   }
 
-  // Close the popover when the user clicks anywhere outside it, or presses Esc.
   useEffect(() => {
     if (!open) return
     const onPointerDown = (event: MouseEvent): void => {
@@ -189,43 +199,35 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     }
   }, [open, closePopover])
 
-  // Re-measure while open (viewport resize / zoom).
   useEffect(() => {
     if (!open) return
     window.addEventListener('resize', measurePopover)
     return () => window.removeEventListener('resize', measurePopover)
   }, [open, measurePopover])
 
-  // Move keyboard focus into the dialog on open.
   useEffect(() => {
     if (open && popoverRef.current !== null) popoverRef.current.focus()
   }, [open])
 
-  // Jump to the top when a day-detail view takes over the popover body.
   useEffect(() => {
     if (day.date !== null && popoverRef.current !== null) popoverRef.current.scrollTop = 0
   }, [day.date])
 
-  // Closing the popover also closes the day-detail view (the state lives here
-  // while the panel is a child that unmounts) and cancels its in-flight
-  // request, so reopening never lands on a stale sub-view.
+  // Closing also closes the day-detail view and cancels its in-flight request,
+  // so reopening never lands on a stale sub-view.
   useEffect(() => {
     if (!open) day.close()
   }, [open, day.close])
 
   const units = effective.units
   const fmt = (value: number): string => tempText(value, units)
-  // Comparatively heavy derived text: keep it stable across the minute tick and
-  // unrelated state changes instead of recomputing on every render.
   const alerts = useMemo(
     () => (data === null ? [] : evaluateAlerts(data, fmt, (kmh) => windText(kmh, units))),
     [data, units],
   )
   const advice = useMemo(() => (data === null ? null : weatherAdvice(data)), [data])
-  // The feed is metric, the chart plots what it is given and only labels it with
-  // `unitSuffix` — so convert here, or a °F axis would print °C numbers. Hours
-  // the feed omitted are dropped from values AND labels together (they stay
-  // index-aligned), instead of being plotted as a fabricated 0 °C.
+  // Feed is metric; the chart only labels what it is given, so convert here or a °F
+  // axis prints °C numbers. Omitted hours drop from values AND labels, index-aligned.
   const trend = useMemo(() => {
     const values: number[] = []
     const labels: string[] = []
@@ -239,16 +241,14 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   if (!effective.enabled) return null
 
-  // Read-only connections (process-local preferences, host without the
-  // namespace) silently drop writes — disable the controls instead of letting
-  // them look like they worked.
+  // Read-only connections silently drop writes — disable the controls instead
+  // of letting them look like they worked.
   const writable = scope.getSnapshot().writable
   const condition = data !== null ? describeSky(data.current) : null
   const unitSuffix = unitLabel(units)
   const windSuffixLabel = windUnitLabel(units)
 
-  // Text shown in the chip while weather is not ready yet (temp takes its place
-  // once `ready`); keeps the chip meaningful during locating / loading / error.
+  // Chip text while weather is not ready; the temperature takes over once `ready`.
   const busyText = status === 'locating'
     ? '定位中…'
     : status === 'loading'
@@ -262,7 +262,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
     ? <WeatherIcon glyph={condition?.glyph ?? 'unknown'} size={17} />
     : <Glyph name="pin" size={15} />
 
-  // Chip tooltip: full context at a glance without widening the header chip.
   const chipTitle = [
     name,
     showTemp && condition !== null ? condition.label : undefined,
@@ -273,7 +272,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const air = data?.air
   const airInfo = air !== undefined && air.aqi !== undefined ? aqiInfo(air.aqi) : null
 
-  // Derived display values for the extended environment facts.
   const cur = data?.current
   const windDisplayValue = windNumber(cur?.windSpeed, units)
   const windDeg = cur?.windDirection
@@ -281,19 +279,27 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const gustTextValue = cur?.windGusts !== undefined ? windText(cur.windGusts, units) : undefined
   const dewPointTextValue = cur?.dewPoint !== undefined ? tempText(cur.dewPoint, units) : undefined
   const pressureTextValue = cur?.pressure !== undefined ? `${Math.round(cur.pressure)} hPa` : undefined
-  // Sub-10 km readings are what actually matter (fog, haze), so keep one decimal
-  // there instead of rounding 0.4 km to a reassuring "0 km".
+  // Sub-10 km readings matter (fog, haze): keep a decimal, not a reassuring "0 km".
   const visibilityTextValue = cur?.visibility !== undefined
-    ? `${cur.visibility < 10 ? cur.visibility.toFixed(1) : Math.round(cur.visibility)} km`
+    ? `${compactDistance(cur.visibility)} km`
     : undefined
-  const cloudTextValue = cur?.cloudCover !== undefined ? `${Math.round(cur.cloudCover)}%` : undefined
+  const cloudTextValue = cur?.cloudCover !== undefined ? pctText(cur.cloudCover) : undefined
+  // Daily totals carry their GB/T 28592-2012 grade (a 24-hour accumulation, not a
+  // rate) — only the day's `precipSum`/`snowfallSum` total can be graded.
   const rainTotal = data?.daily[0]?.precipSum
-  const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05 ? `${rainTotal.toFixed(1)} mm` : undefined
+  const rainGrade = rainGrade24h(rainTotal)
+  const rainTotalText = rainTotal !== undefined && rainTotal >= 0.05
+    ? `${rainTotal.toFixed(1)} mm${rainGrade !== undefined && !UNGRADED_TOTALS.has(rainGrade) ? ` · ${rainGrade}` : ''}`
+    : undefined
+  const snowTotal = data?.daily[0]?.snowfallSum
+  const snowGrade = snowGrade24h(snowTotal)
+  const snowTotalText = snowTotal !== undefined && snowTotal > 0
+    ? `${snowTotal.toFixed(1)} cm${snowGrade !== undefined && !UNGRADED_TOTALS.has(snowGrade) ? ` · ${snowGrade}` : ''}`
+    : undefined
   // Unreported probability reads as "--", not as a confident 0 %.
   const todayPrecipProb = data?.daily[0]?.precipProb
 
-  // "今日信息" wrap-row entries, assembled conditionally so only fields the
-  // feed actually returned are shown.
+  // "今日信息" entries, assembled so only fields the feed actually returned appear.
   const fact = (glyph: GlyphName | undefined, text: string): TodayFactItem => ({ glyph, text })
   const todayItems: TodayFactItem[] = []
   if (data?.sunrise !== undefined) todayItems.push(fact('sunrise', timeLabel(data.sunrise)))
@@ -307,12 +313,12 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   if (visibilityTextValue !== undefined) todayItems.push(fact('eye', `能见度 ${visibilityTextValue}`))
   if (cloudTextValue !== undefined) todayItems.push(fact('cloud', `云量 ${cloudTextValue}`))
   if (rainTotalText !== undefined) todayItems.push(fact('droplet', `今日雨量 ${rainTotalText}`))
+  if (snowTotalText !== undefined) todayItems.push(fact(undefined, `今日降雪 ${snowTotalText}`))
 
   const banner = hasDanger ? BANNER.danger : BANNER.warning
 
-  // One "retry" semantics for both error states: re-fetch the CURRENT location
-  // when one exists; only when we never resolved a location does retry mean
-  // "locate again" (and bypass the auto cache).
+  // One "retry" for both error states: re-fetch the CURRENT location, or locate
+  // again (bypassing the auto cache) only when none was ever resolved.
   const retry = (): void => {
     if (location === null) relocate()
     else feed.refresh()
@@ -347,8 +353,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             {busyText}
           </span>
         ) : null}
-        {/* Live date & time — always visible on the chip, whether the popover
-            is collapsed or expanded. Rendered by its own component so the
+        {/* Live date & time, always visible on the chip. Own component so the
             minute tick does not re-render the whole bar. */}
         <LiveClock />
       </button>
@@ -358,9 +363,10 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
           ref={popoverRef}
           id={popoverId}
           role="dialog"
-          aria-modal="false"
+          aria-modal="true"
           aria-label="天气详情"
           tabIndex={-1}
+          onKeyDown={onPopoverKeyDown}
           className="dshw-popover"
           style={{
             ...popoverStyle,
@@ -380,17 +386,16 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             </div>
           )}
 
-          {/* Saved-city / drift feedback while the popover is open (the floating
-              toast is hidden then, so it would otherwise be swallowed). */}
+          {/* Saved-city / drift feedback while open — the floating toast is hidden then. */}
           {toast !== null && (
             <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10, fontSize: 12.5, color: TOKEN.fg, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.accent}`, borderRadius: 10, padding: '6px 10px' }}>
               📍 <span>{toast}</span>
             </div>
           )}
 
-          {/* Header + saved-city switcher stay mounted in EVERY status (locating /
-              loading / error) so the user can always switch cities or return to
-              当前位置 — only the forecast body below is status-gated. */}
+          {/* Header + saved-city switcher mount in EVERY status so the user can
+              switch cities or return to 当前位置; only the forecast body below is
+              status-gated. */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               <Glyph name="pin" size={14} />
@@ -427,7 +432,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
             </div>
           </div>
 
-          {/* Saved-city switcher */}
           {saved.saved.length > 0 && (
             <div role="group" aria-label="切换城市" style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 6, marginBottom: 8 }}>
               <button
@@ -436,7 +440,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                 aria-pressed={effective.locationMode === 'auto'}
                 style={effective.locationMode === 'auto' ? switchChipActive : switchChip}
               >
-                当前位置
+                {/* Same constant the saved-city guard rejects — must not drift (geolocation.ts). */}
+                {CURRENT_LOCATION_LABEL}
               </button>
               {saved.saved.map((entry) => (
                 <button
@@ -456,7 +461,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
           {status === 'ready' && data !== null && (
             <>
               {day.date !== null ? (
-                /* ── Day detail view ─────────────────────────────────────── */
                 day.error !== null ? (
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ color: TOKEN.danger }}>{day.error}</div>
@@ -471,9 +475,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                   <div style={{ color: TOKEN.fgMuted, textAlign: 'center', padding: 20 }}>加载当日详情…</div>
                 )
               ) : (
-                /* ── Normal forecast view ────────────────────────────────── */
                 <>
-                  {/* Stale-snapshot banner: the last refresh failed, showing cached data */}
                   {feed.stale && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 12, lineHeight: '17px', color: BANNER.warning.color, background: BANNER.warning.bg, border: `1px solid ${BANNER.warning.border}`, borderRadius: 10, padding: '6px 10px' }}>
                       <span style={{ flex: '1 1 auto', minWidth: 0 }}>
@@ -483,7 +485,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     </div>
                   )}
 
-                  {/* Alert banner */}
                   {alerts.length > 0 && (
                     <div
                       style={{
@@ -505,7 +506,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     </div>
                   )}
 
-                  {/* Hero + stat grid (side by side) */}
                   <div data-block="hero-stats" style={{ display: 'flex', alignItems: 'center', gap: 18, marginTop: 4 }}>
                     <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', gap: 12 }}>
                       <div style={{ flex: '0 0 auto', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 58, height: 58, borderRadius: 16, background: TOKEN.bgSoft, border: `1px solid ${TOKEN.border}` }}>
@@ -516,13 +516,22 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                         <div style={{ fontSize: 12.5, color: TOKEN.fgMuted, lineHeight: '17px', marginTop: 1 }}>
                           {condition?.label} · 体感 {fmt(data.current.apparentTemperature)}
                         </div>
+                        {/* Every description rests on a measurement, shown here so
+                            the user can check it: describe.ts attaches `basis` to
+                            each conclusion, and an `uncertain` one is marked a model
+                            inference rather than stated as fact. */}
+                        {condition?.basis !== undefined && (
+                          <div style={basisLine}>
+                            {condition.uncertain ? '模式推断' : '依据'} · {condition.basis}
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div style={{ flex: '1 1 0', minWidth: 0, display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
                       <StatChip
                         icon={<Glyph name="droplet" size={13} />}
                         label="湿度"
-                        value={cur?.humidity !== undefined ? `${Math.round(cur.humidity)}%` : '--'}
+                        value={cur?.humidity !== undefined ? pctText(cur.humidity) : '--'}
                       />
                       <StatChip
                         icon={<Glyph name="wind" size={13} />}
@@ -540,10 +549,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     </div>
                   </div>
 
-                  {/* Today facts */}
                   <TodayFacts items={todayItems} />
 
-                  {/* 15-minute precipitation strip */}
                   {data.minutely !== undefined && data.minutely.length > 0 && (
                     <div data-block="rain" style={{ marginTop: 10 }}>
                       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
@@ -556,7 +563,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                     </div>
                   )}
 
-                  {/* One-line advice */}
                   {advice !== null && (
                     <div data-block="advice" style={{ display: 'flex', alignItems: 'center', gap: 7, marginTop: 10, fontSize: 12.5, color: TOKEN.fgMuted, background: TOKEN.bgSoft, borderRadius: 10, padding: '8px 12px' }}>
                       <span>{advice.icon}</span>
@@ -585,7 +591,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
                 </>
               )}
 
-              {/* Footer controls */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 8, borderTop: `1px solid ${TOKEN.border}` }}>
                 <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>单位</span>
                 <div role="group" aria-label="温度单位" style={{ display: 'flex', background: TOKEN.bgSoft, borderRadius: 999, padding: 2 }}>
@@ -627,10 +632,8 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
         </div>
       )}
 
-      {/* Under-chip toast: IP-drift city switches and saved-city feedback.
-          Hidden while the popover is open so they do not overlap. Announced as
-          a status region: "已切换到 X" / "切换失败" is otherwise silent for a
-          screen reader. */}
+      {/* Under-chip toast: drift/saved-city feedback, hidden while open. `role=status`
+          so "已切换到 X" / "切换失败" is not silent to a screen reader. */}
       {toast !== null && !open && (
         <div
           role="status"
@@ -660,7 +663,6 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   )
 }
 
-/** Chip-level geometry/styles (kept beside the component they style). */
 const chipButton: CSSProperties = {
   ...baseButton,
   display: 'flex',
@@ -692,6 +694,9 @@ const chipIconWrap: CSSProperties = {
 const chipTemp: CSSProperties = { fontSize: 17, fontWeight: 700, lineHeight: '22px', ...NUM, flex: '0 0 auto' }
 
 const chipCondition: CSSProperties = { fontSize: 14, lineHeight: '20px', color: TOKEN.fgMuted, whiteSpace: 'nowrap', flex: '0 0 auto' }
+
+/** The "依据 · …" line under the hero label — quieter than the value it explains. */
+const basisLine: CSSProperties = { fontSize: 11, lineHeight: '15px', color: TOKEN.fgMuted, opacity: 0.85, marginTop: 2 }
 
 const clockSpan: CSSProperties = {
   flex: '0 0 auto',

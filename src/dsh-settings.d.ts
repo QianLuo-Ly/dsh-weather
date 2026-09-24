@@ -1,12 +1,5 @@
 /**
- * Local type shim for the runtime `ctx.settings` service.
- *
- * The dsh-settings package the loader resolves for host plugins lives at the
- * profile anchor (`profiles/node_modules/@deepseek-ai/dsh-settings`,
- * 0.1.2-alpha.3) and exposes `SettingsProvider.installSection(...)`. That
- * published version's npm tree has unsatisfiable dependency ranges, so this
- * package does NOT depend on `@deepseek-ai/dsh-settings`; the shape below is
- * the minimal subset the weather plugin uses, verified against that runtime.
+ * Local type shim for the runtime `ctx.settings` service. dsh-settings ships two registrar shapes — current `SettingsProvider.installSection(owner, ns, schema, entry, hooks)` (declared below) and older 0.1.1-rc.x module-level `installSettingsSection`, which the provider's typings do not expose — and the peer range must span both. Local types only: the published package's npm tree has unsatisfiable dependency ranges, so this is the minimal subset the plugin uses.
  */
 import type { Context } from '@deepseek-ai/cordis'
 

@@ -1,9 +1,7 @@
 /**
- * Temperature trend chart with indicators: a dependency-free SVG line chart
- * showing the 24h temperature curve with the day's high / low annotated in a
- * left gutter (with dashed guide lines), a ring marker at "now" (the first
- * point), and hour labels along the baseline. Designed for a full-width hero
- * slot: the 640-unit viewBox renders ~1:1 in a ~620px container.
+ * Temperature trend chart: hand-rolled SVG (no chart dependency for a single curve) showing the 24h temperature
+ * curve with the day's high / low in a left gutter, a ring at "now" and hour labels on the baseline. The
+ * 640-unit viewBox renders ~1:1 in a ~620px hero slot.
  */
 import { useId, type ReactElement } from 'react'
 import { TOKEN } from './theme'
@@ -37,9 +35,8 @@ export function TrendChart(props: TrendChartProps): ReactElement {
   const flat = max === min
   const span = max - min || 1
   const stepX = (WIDTH - PAD_X * 2) / (values.length - 1)
-  // A constant-temperature window has no span to scale against; plotting it at
-  // (value-min)/span === 0 would pin the line to the baseline and read as
-  // "0 °C" or a broken chart. Centre it instead.
+  // A constant-temperature window has no span to scale against; plotting the ratio as 0 would pin the
+  // line to the baseline and read as "0 °C" or a broken chart. Centre it instead.
   const points = values.map((value, index) => ({
     x: PAD_X + index * stepX,
     y: PAD_Y + (height - PAD_Y * 2) * (flat ? 0.5 : 1 - (value - min) / span),
@@ -59,8 +56,7 @@ export function TrendChart(props: TrendChartProps): ReactElement {
   const maxPoint = points[values.indexOf(max)]
   const minPoint = points[values.indexOf(min)]
 
-  // The chart was `aria-hidden`, which left the whole 24 h trend unreachable:
-  // give it an image role with the two numbers that carry the meaning.
+  // Was `aria-hidden`, leaving the trend unreachable; an image role with the two numbers fixes that.
   const summary = `温度趋势：最低 ${Math.round(min)}${unit}，最高 ${Math.round(max)}${unit}`
 
   return (

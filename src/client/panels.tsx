@@ -1,15 +1,12 @@
 /**
- * Presentational panels for the weather popover — pure renders driven by
- * plain props, extracted from WeatherBar.tsx so that file keeps the data &
- * interaction logic and each block is testable/themeable on its own.
- *
- * All of them read the shared {@link TOKEN} / {@link NUM} presets and the
- * condition/icon helpers; none of them touches settings, fetching or state.
+ * Presentational panels for the weather popover — pure renders driven by plain
+ * props, so WeatherBar.tsx keeps the data/interaction logic and each block is
+ * testable/themeable alone. None touch settings, fetching or state.
  */
 import type { CSSProperties, ReactElement } from 'react'
 import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from './weather-api'
-import { RAIN_MM_PER_15MIN } from './weather-api'
-import { dayLabel, hourLabel, timeLabel } from './condition'
+import { MINUTE_STEP_MIN, RAIN_MM_PER_15MIN } from './weather-api'
+import { dayLabel, durationLabel, hourLabel, timeLabel } from './condition'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
 import { glyphForCode } from './describe'
 import { actionButton, NUM, PALETTE, TOKEN } from './theme'
@@ -90,19 +87,19 @@ export function StatChip(props: {
 }
 
 /**
- * Mini bar strip of 15-minute precipitation (one column per step). Bar height
- * scales with the step amount; dry steps stay as a low neutral tick, wet
- * steps deepen with intensity.
+ * Mini bar strip of 15-minute precipitation — bar height scales with the step
+ * amount; dry steps stay a low tick, wet steps deepen with intensity.
  */
 export function RainStrip(props: { points: MinutelyPoint[] }): ReactElement {
   const { points } = props
   const maxValue = Math.max(...points.map((point) => point.precipitation), 0.5)
+  // The strip's own span, labelled the same way as the rain-timing line.
+  const windowText = durationLabel(points.length * MINUTE_STEP_MIN)
   return (
-    // One summary for assistive tech instead of 24 colour-only bars: the bars
-    // themselves carry their value in a `title` (mouse-only) and are decorative.
+    // One summary for assistive tech; the bars are decorative (value only in `title`).
     <div
       role="img"
-      aria-label={`未来 ${points.length * 15 / 60} 小时降水，最大 ${maxValue.toFixed(1)} 毫米/15 分钟`}
+      aria-label={`未来 ${windowText}降水，最大 ${maxValue.toFixed(1)} 毫米/${MINUTE_STEP_MIN} 分钟`}
       style={{ display: 'flex', gap: 3, alignItems: 'flex-end' }}
     >
       {points.map((point, index) => {
@@ -161,22 +158,19 @@ export function HourlyStrip(props: {
 }
 
 /**
- * 7-day forecast rows with temperature-range gradient bars.
- *
- * `onSelectDay` makes every row openable (the row becomes a real button);
- * without it the rows stay inert and render exactly as before.
+ * 7-day forecast rows with temperature-range gradient bars. `onSelectDay`
+ * turns each row into a real button; without it the rows stay inert.
  */
 export function DailyList(props: {
   title: string
   points: DailyPoint[]
   fmt: (value: number) => string
-  /** 点击某一行时回传该行的日期（`YYYY-MM-DD`）；不传则行不可点。 */
+  /** Called with the row's date (`YYYY-MM-DD`) on click; rows are inert if absent. */
   onSelectDay?: (date: string) => void
 }): ReactElement {
   const { title, points, fmt, onSelectDay } = props
-  // The range bars are scaled over the week's REPORTED extremes. Days the feed
-  // omitted are skipped rather than counted as 0 °C — that would stretch the
-  // scale down to freezing and squash every real bar into a sliver.
+  // Range bars scale over the week's REPORTED extremes. Omitted days are skipped,
+  // not counted as 0 °C — that would squash every real bar into a sliver.
   const reportedMin: number[] = []
   const reportedMax: number[] = []
   for (const day of points) {
@@ -199,8 +193,7 @@ export function DailyList(props: {
           const width = tempMin !== undefined && tempMax !== undefined
             ? Math.max(8, ((tempMax - tempMin) / weekSpan) * 100)
             : 0
-          // Shared row metrics, so the clickable (button) and inert (div) rows
-          // stay pixel-identical — a button only adds the UA resets below.
+          // Shared row metrics so clickable and inert rows stay pixel-identical.
           const row: CSSProperties = {
             display: 'flex',
             alignItems: 'center',
@@ -273,7 +266,7 @@ export function DailyList(props: {
   )
 }
 
-/** `2026-09-05` → `9月5日 周五`（按本地零点解析，避免 UTC 偏移串到前一天）。 */
+/** `2026-09-05` → `9月5日 周五` (parsed at local midnight to avoid a UTC day shift). */
 function detailDateLabel(date: string): string {
   const parsed = new Date(`${date}T00:00:00`)
   if (Number.isNaN(parsed.getTime())) return date
@@ -281,7 +274,7 @@ function detailDateLabel(date: string): string {
   return `${parsed.getMonth() + 1}月${parsed.getDate()}日 ${weekdays[parsed.getDay()]}`
 }
 
-/** 某一天的详情面板：顶部返回按钮 + 当日概况 + 逐小时列表。缺报字段显示 —。 */
+/** Day-detail panel: back button + summary + hourly list. Missing fields show —. */
 export function DayDetailPanel(props: {
   detail: DayDetail
   units: UnitSetting
