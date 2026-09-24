@@ -11,6 +11,9 @@ node_modules/
 # 本地联调产物（构建 bundle、DOM dump、临时页面等），不进仓库
 harness/
 
+# 本地 AI 工具产物（记忆、技能等），不进仓库
+.workbuddy/
+
 # 个人本地调试脚本
 scripts/set-manual-panyu.mjs
 
