@@ -111,6 +111,34 @@ export const HAZE_SLIGHT_VIS_KM = 5
 export const HAZE_MILD_VIS_KM = 3
 export const HAZE_MODERATE_VIS_KM = 2
 /**
+ * 沙尘判据 — GB/T 20480-2017《沙尘天气等级》。
+ *
+ * 首要判据是 CAMS 的沙尘浓度 `dust`，**不是能见度**。这不是图省事，是被实测逼出来的：
+ * 数据源的 `visibility` 来自气象模式，与空气质量端点的颗粒物**不同源** —— 库尔勒 dust
+ * 峰值 997 µg/m³、PM10 633 时，能见度纹丝不动地停在 26.9 km（30 h 逐时相关系数
+ * r = -0.19）。拿能见度当门，整段沙尘判识永远不会触发，沙尘天会报「晴」。
+ *
+ * `dust` 的背景值分得很干净：非沙尘城市实测 0–12 µg/m³，沙尘区 63–337。但它**不能单独
+ * 作判**：CAMS 在沙漠边缘的背景偏高，实测张掖 dust 72 而 PM10 只有 17 µg/m³（空气干净
+ * 得能当净化器广告），照判就是误报。故 `dust` 必须由 PM10 佐证 —— 沙尘必然抬高 PM10，
+ * 只有几十的 PM10 说明空气里根本没那么多颗粒物。
+ * 拿不到 `dust` 时退回颗粒物粒径判据：沙尘把 PM10 顶得很高而 PM2.5 占比低（粗颗粒主导），
+ * 霾相反（细颗粒主导）。
+ *
+ * 能见度只用于**分级**（GB/T 20480-2017 按它分浮尘/扬沙/沙尘暴/强/特强）；缺失或
+ * ≥ 10 km 时仍给最低等级「浮尘」—— 该字段既然不反映沙尘，就不能反过来用它否认沙尘。
+ * 浮尘与扬沙再按风力分开（≤ 3 级 = 浮尘，> 3 级 = 扬沙；3 级 = 3.4–5.4 m/s ≈ 19 km/h）。
+ */
+export const DUST_CONCENTRATION_MIN = 50
+/** `dust` 主判同时要求的 PM10 下限。低于这个数说明空气本来就干净，谈不上沙尘天气。 */
+export const DUST_PM10_FLOOR = 100
+/** `dust` 缺失时，纯粒径判据的 PM10 下限（粗颗粒主导才算沙尘）。 */
+export const DUST_PM10_MIN = 150
+export const DUST_FINE_RATIO_MAX = 0.5
+export const WIND_LEVEL3_KMH = 19
+export const DUST_SEVERE_VIS_KM = 0.5
+export const DUST_EXTREME_VIS_KM = 0.05
+/**
  * Cloud-cover grades (%) — GB/T 35663-2017《天气预报基本术语》grades by 成数
  * (tenths): 晴 0–2, 少云 3–5, 多云 6–8, 阴 9–10. A continuous cover reading needs
  * a cut between bands, so each sits at the midpoint of the 成数 it divides:
@@ -130,6 +158,13 @@ export const RAIN_WARN_MMH = 2
 export const SNOW_WARN_MMH = 2
 /** Below any warning tier, but 40 km/h ≈ 6 级 — the 大风 line itself (GB/T 28591-2012). */
 export const WIND_ADVICE_KMH = 40
+/**
+ * HJ 633-2012 的五级（重度污染）起点。越过它，口罩提示优先于降水提示 ——
+ * 带伞是舒适问题，吸霾是健康问题。
+ */
+export const AQI_HEAVY = 200
+/** 四级（中度污染）起点：落在建议链末尾，免得每个雨天都被空气质量抢走。 */
+export const AQI_POOR = 150
 
 const DAY: Record<number, ConditionInfo> = {
   0: { label: '晴', emoji: '☀️' },
@@ -209,12 +244,10 @@ export function dayLabel(iso: string, index = 0): string {
 }
 
 /**
- * AQI level label + badge color. The feed reports Open-Meteo's `us_aqi`, i.e. the
- * US EPA scale — NOT China's HJ 633-2012 index. The two share the six band EDGES
- * (50 / 100 / 150 / 200 / 300) and the 绿黄橙红紫褐红 colors reproduced below, but
- * they do not agree on values: PM2.5 at 75 µg/m³ is 良 in China and 轻度污染 by
- * US EPA. So this label approximates the Chinese category; a true HJ 633-2012
- * grade needs IAQI computed from the six pollutant concentrations.
+ * AQI level label + badge color. The number handed in is **China's** HJ 633-2012 index,
+ * computed in `./aqi` from the six pollutant concentrations; the bands below are that
+ * standard's 六级 (优 0–50, 良 51–100, 轻度 101–150, 中度 151–200, 重度 201–300,
+ * 严重 > 300) with the 绿黄橙红紫褐红 it prescribes.
  */
 export function aqiInfo(aqi: number): { label: string; color: string } {
   if (aqi <= 50) return { label: '优', color: '#4ade80' }
@@ -256,6 +289,12 @@ export function weatherAdvice(data: WeatherData): { icon: string; text: string }
   if (SNOW_CODES.has(code)) {
     return { icon: '❄️', text: '有降雪，注意路面湿滑' }
   }
+  // 重度污染抢在降水之前：带伞是舒适问题，吸霾是健康问题。中度及以下仍排在链尾 ——
+  // 否则每到雨天，空气质量那一句都会把「带伞」挤掉，而它才是当天最该说的话。
+  const aqi = data.air?.aqi
+  if (aqi !== undefined && aqi > AQI_HEAVY) {
+    return { icon: '😷', text: '空气重度污染，外出建议佩戴口罩' }
+  }
   if (PRECIP_CODES.has(code)) {
     return { icon: '☂️', text: '有降水，出门记得带伞' }
   }
@@ -279,7 +318,7 @@ export function weatherAdvice(data: WeatherData): { icon: string; text: string }
   if ((today?.precipProb ?? 0) >= 60) {
     return { icon: '🌧️', text: '今日降水概率较高，备好雨具' }
   }
-  if (data.air !== undefined && data.air.aqi !== undefined && data.air.aqi > 150) {
+  if (aqi !== undefined && aqi > AQI_POOR) {
     return { icon: '😷', text: '空气质量较差，外出建议佩戴口罩' }
   }
   return { icon: '🌤️', text: '天气平稳，适合日常出行' }

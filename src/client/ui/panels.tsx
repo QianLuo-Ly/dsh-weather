@@ -8,7 +8,7 @@ import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from '../data/
 import { MINUTE_STEP_MIN, RAIN_MM_PER_15MIN } from '../data/weather-api'
 import { dayLabel, durationLabel, hourLabel, timeLabel } from '../data/condition'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
-import { glyphForCode } from '../data/describe'
+import { describeSky, glyphForCode, skyEvidenceOfHourly } from '../data/describe'
 import { actionButton, NUM, PALETTE, TOKEN } from './theme'
 import { tempText, windText, type UnitSetting } from '../shared/units'
 
@@ -141,7 +141,8 @@ export function HourlyStrip(props: {
           <div key={point.time} style={{ flex: '0 0 auto', width: 46, textAlign: 'center', background: TOKEN.bgSoft, borderRadius: 10, padding: '5px 2px' }}>
             <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
             <div style={{ margin: '2px 0' }}>
-              <WeatherIcon glyph={glyphForCode(point.weatherCode, point.isDay)} size={18} />
+              {/* Described from the hour's own rate, so the icon agrees with the bar's line. */}
+              <WeatherIcon glyph={describeSky(skyEvidenceOfHourly(point)).glyph} size={18} />
             </div>
             {/* A step the feed did not report renders as "—", never as 0 °C. */}
             <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>
@@ -331,7 +332,7 @@ export function DayDetailPanel(props: {
             <div style={{ fontSize: 11, color: TOKEN.fgMuted, ...NUM }}>{hourLabel(point.time)}</div>
             <div style={{ margin: '2px 0', minHeight: 18 }}>
               {point.weatherCode !== undefined
-                ? <WeatherIcon glyph={glyphForCode(point.weatherCode, point.isDay)} size={18} />
+                ? <WeatherIcon glyph={describeSky(skyEvidenceOfHourly(point)).glyph} size={18} />
                 : <span style={{ fontSize: 12, color: TOKEN.fgMuted }}>—</span>}
             </div>
             <div style={{ fontSize: 12.5, fontWeight: 600, ...NUM }}>

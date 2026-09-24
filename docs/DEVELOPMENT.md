@@ -79,6 +79,7 @@ src/client/           # 浏览器半侧
     geolocation.ts    #     定位（GPS 优先、IP 兜底）、城市搜索、定位诊断
     location-match.ts #     载荷与当前定位是否同一地点（漂移判定用）
     condition.ts      #     WMO 分类/阈值单一源 + 中文文案 + 时间格式化
+    aqi.ts            #     中国 AQI（HJ 633-2012 的 IAQI 分段表与自算，非数据源口径）
     describe.ts       #     天气描述文案与分级（天空/雨雪强度）
     alerts.ts         #     恶劣天气评估（按实测强度分级）
   shared/             #   跨层通用工具
@@ -91,7 +92,18 @@ scripts/check-encoding.mjs  # 扫描/修复双重编码乱码（UTF-8 被当作 
 scripts/verify-bundle.cjs   # 产物契约断言（factory 头尾、体积、席位、WeatherBar）
 scripts/verify-features.cjs # 功能探针断言（feed 参数、供应商、暗色 token、React 未内联）
 scripts/smoke-client.cjs    # 在 vm 里真正跑一遍 factory，校验导出与 inject
+scripts/verify-units.cjs    # 单元行为断言（阈值、分级、抓取映射）
+scripts/calibrate-cities.cjs # 100 城真实报文自检，自动报异常（npm run probe:cities，需网络）
+scripts/probe-live.cjs      # 单城报文探针 + 构造边界场景（npm run probe:live，需网络）
+scripts/dust-check.cjs      # 逐时对照 PM10/dust 与能见度，复核数据源字段一致性（npm run probe:dust）
 ```
+
+探针类脚本**不进 `npm run check`** —— 它们依赖网络与实时天气，是手动体检工具而非关卡。
+改描述/阈值规则后，先 `npm run probe:cities` 跑一遍真实数据，再提交。
+
+### 发布包边界
+
+`npm publish` 的内容由 `package.json` 的 `files` 白名单决定，**与 `.gitignore` 是两套互不通气的机制**：被 `.gitignore` 挡在仓库外的文件，只要落在 `files` 列出的目录里，照样会进发布包。`scripts/` 因此**不在白名单内** —— 它是开发工具（构建、验证、探针、个人调试脚本），而使用者只需要 `lib/`（已编译产物）与 `cordis.patch.yml`。改动 `files` 后一律用 `npm pack --dry-run` 实测清单，不要靠读配置推断。
 
 ## 校验
 

@@ -4,6 +4,7 @@
  * metric (°C / km/h / mm / hPa); display units are applied client-side.
  */
 import { apiFetch, withTimeout } from '../shared/http'
+import { computeAqi, POLLUTANT_LABEL, type Pollutant } from './aqi'
 import type { GeoLocation } from './geolocation'
 
 export interface CurrentWeather {
@@ -84,6 +85,34 @@ export interface DailyPoint {
   snowfallSum?: number
 }
 
+/**
+ * Air quality shown in the header card. `aqi` is **China's** index — computed in
+ * `./aqi` from the six pollutant concentrations per HJ 633-2012, deliberately NOT the
+ * feed's `us_aqi`: that is the US EPA scale, and on the same air the two disagree
+ * (PM2.5 = 75 µg/m³ is 良 here and 轻度污染 there).
+ */
+export interface AirQuality {
+  /** HJ 633-2012 AQI — the maximum of the six sub-indices. */
+  aqi?: number
+  /** 首要污染物中文名；AQI ≤ 50 时缺省，国标对该档不报首要污染物。 */
+  primary?: string
+  /** PM2.5 24 h mean (µg/m³); also shown on its own in the card. */
+  pm25?: number
+  /** PM10 24 h mean (µg/m³); the description layer uses it to tell 沙尘 from 霾. */
+  pm10?: number
+  /**
+   * CAMS 沙尘浓度 (µg/m³), instantaneous — 沙尘判识的直接证据.
+   *
+   * Not averaged (a sandstorm is a short event) and not part of the AQI. This field exists
+   * because the feed's `visibility` does NOT track sand: measured over 30 h at 库尔勒,
+   * `dust` peaked at 997 µg/m³ while visibility sat flat at 26.9 km (r = -0.19). A 沙尘
+   * judgement resting on visibility therefore never fires, so it rests on this instead.
+   */
+  dust?: number
+  /** The concentrations the index rests on (CO in mg/m³, the rest µg/m³). */
+  concentrations?: Partial<Record<Pollutant, number>>
+}
+
 export interface WeatherData {
   location: GeoLocation
   current: CurrentWeather
@@ -95,8 +124,8 @@ export interface WeatherData {
   sunset?: string
   /** Today's maximum UV index. */
   uvIndexMax?: number
-  /** Current air quality; `aqi` / `pm25` are individually absent when unreported — a missing value never masquerades as `0`. */
-  air?: { aqi?: number; pm25?: number }
+  /** Current air quality; every field is individually absent when it could not be computed. */
+  air?: AirQuality
   /** 15-minute precipitation steps for the coming hours (Open-Meteo minutely_15). */
   minutely?: MinutelyPoint[]
   /** Rain timing derived from `minutely` (absent when that feed is unavailable). */
@@ -164,10 +193,32 @@ function scanRain(steps: MinutelyPoint[], elapsedInFirstStep = 0): RainScan {
 
 const FORECAST_URL = 'https://api.open-meteo.com/v1/forecast'
 const AIR_QUALITY_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality'
-/** Air-quality feed budget; it is additive, so a dead feed must not delay the forecast. */
-const AIR_TIMEOUT_MS = 5_000
+/**
+ * The six pollutants HJ 633-2012 grades. Requested as `current` (for the O3 1 h fallback)
+ * AND as `hourly` (to average over the past day) — see {@link mapAir}.
+ */
+const AIR_VARIABLES = 'pm10,pm2_5,carbon_monoxide,nitrogen_dioxide,sulphur_dioxide,ozone'
+/**
+ * `dust` rides on `current` ONLY. It is CAMS' 沙尘 species — the direct evidence for 沙尘天气
+ * — and it is deliberately NOT averaged, because a 24 h mean smooths a sandstorm into
+ * nothing. It never enters the AQI (HJ 633-2012 has no dust row).
+ */
+const AIR_CURRENT_VARIABLES = `${AIR_VARIABLES},dust`
+/**
+ * Air-quality feed budget. It is additive, so a dead feed must not delay the forecast —
+ * but this budget was raised from 5 s along with the grace window below: the payload now
+ * carries a day of hourly concentrations on top of `current`, and under the old budget
+ * the request would have lost the race often enough that the AQI simply went missing.
+ */
+const AIR_TIMEOUT_MS = 8_000
 /** How long the forecast waits for the additive air feed before abandoning it this refresh; the abandoned request times out on its own. */
-const AIR_GRACE_MS = 1_200
+const AIR_GRACE_MS = 2_500
+/** Hours averaged for the 24 h mean concentrations the standard is written against. */
+const AIR_MEAN_HOURS = 24
+/** Window length of the O3 8 h running mean (HJ 633-2012 表 1). */
+const AIR_O3_WINDOW = 8
+/** µg/m³ → mg/m³: the feed reports CO in µg/m³, the standard's table is in mg/m³. */
+const UG_PER_MG = 1_000
 /** Fallback step length when the feed omits `current.interval` (Open-Meteo's is 900 s). */
 const PRECIP_INTERVAL_FALLBACK_S = 900
 /** Daily forecast horizon. Keeps the request param and the slice in sync. */
@@ -244,6 +295,29 @@ interface RawDaily {
 interface RawMinutely {
   time?: string[]
   precipitation?: (number | null)[]
+}
+
+/** 空气质量接口的原始形状；`current` 是瞬时值，`hourly` 才是算国标均值用的序列。 */
+interface RawAir {
+  current?: {
+    time?: string
+    pm10?: number | null
+    pm2_5?: number | null
+    carbon_monoxide?: number | null
+    nitrogen_dioxide?: number | null
+    sulphur_dioxide?: number | null
+    ozone?: number | null
+    dust?: number | null
+  }
+  hourly?: {
+    time?: string[]
+    pm10?: (number | null)[]
+    pm2_5?: (number | null)[]
+    carbon_monoxide?: (number | null)[]
+    nitrogen_dioxide?: (number | null)[]
+    sulphur_dioxide?: (number | null)[]
+    ozone?: (number | null)[]
+  }
 }
 
 interface RawForecast {
@@ -356,16 +430,102 @@ const mapMinutely = (
   return { minutely: steps, rainSoon: scanRain(steps, elapsed) }
 }
 
+/** µg/m³ → mg/m³, for CO alone: its row in the standard's table is in mg/m³. Absence stays absence. */
+function scaleToMg(value: number | undefined): number | undefined {
+  return value === undefined ? undefined : value / UG_PER_MG
+}
+
 /**
- * Air quality is additive: parsed after the main JSON under a short grace window,
- * so it cannot hold the forecast back. Unreported values stay absent, not 0.
+ * Mean of `[end - hours, end)`. One missing point abandons the whole window (undefined)
+ * rather than averaging the rest: a partial sample reads as a cleaner day than it was,
+ * which would quietly understate the index it feeds.
+ */
+function trailingMean(values: (number | null | undefined)[], end: number, hours: number): number | undefined {
+  const from = end - hours
+  if (from < 0 || end > values.length) return undefined
+  let sum = 0
+  for (let i = from; i < end; i += 1) {
+    const value = values[i]
+    if (value === null || value === undefined || !Number.isFinite(value)) return undefined
+    sum += value
+  }
+  return sum / hours
+}
+
+/**
+ * Largest `window`-hour running mean inside `[dayStart, end)`. HJ 633-2012 grades O3 by its
+ * 日最大 8 小时滑动平均, not by a plain daily average. Undefined before the day is
+ * `window` hours old — the caller then falls back to the 1 h figure.
+ */
+function maxRunningMean(
+  values: (number | null | undefined)[],
+  dayStart: number,
+  end: number,
+  window: number,
+): number | undefined {
+  let max: number | undefined
+  for (let start = Math.max(dayStart, 0); start + window <= end; start += 1) {
+    const mean = trailingMean(values, start + window, window)
+    if (mean !== undefined && (max === undefined || mean > max)) max = mean
+  }
+  return max
+}
+
+/**
+ * Air quality is additive: parsed after the main JSON under a short grace window, so it
+ * cannot hold the forecast back. Every value stays absent when it cannot be computed —
+ * a missing reading never masquerades as `0`.
+ *
+ * The index is computed here rather than taken from the feed. The feed's `us_aqi` uses the
+ * US EPA scale, and the card prints this number right next to a PM2.5 concentration, so a
+ * borrowed foreign index visibly contradicts its own neighbour. HJ 633-2012 grades 24 h
+ * means (O3 by its 8 h running mean), hence the averaging: the feed's `current` block is an
+ * instantaneous value and cannot be handed to that table as-is.
  */
 const mapAir = (res: { ok: boolean; json: unknown } | null): WeatherData['air'] => {
   if (res === null || !res.ok) return undefined
-  const raw = res.json as { current?: { us_aqi?: number | null; pm2_5?: number | null } } | null
-  const aqi = raw?.current?.us_aqi ?? undefined
-  const pm25 = raw?.current?.pm2_5 ?? undefined
-  return aqi === undefined && pm25 === undefined ? undefined : { aqi, pm25 }
+  const raw = res.json as RawAir | null
+  const hourly = raw?.hourly
+  const times = hourly?.time ?? []
+  // Means run over COMPLETED hours only: the hour containing `current` is still
+  // accumulating, and counting it would dilute the mean with a partial sample.
+  const end = containingGridIndex(times, raw?.current?.time)
+  const isoDate = raw?.current?.time?.slice(0, 10)
+  const dayStart = isoDate === undefined
+    ? 0
+    : Math.max(0, times.findIndex((time) => time.startsWith(isoDate)))
+
+  const concentrations = {
+    pm25: trailingMean(hourly?.pm2_5 ?? [], end, AIR_MEAN_HOURS),
+    pm10: trailingMean(hourly?.pm10 ?? [], end, AIR_MEAN_HOURS),
+    so2: trailingMean(hourly?.sulphur_dioxide ?? [], end, AIR_MEAN_HOURS),
+    no2: trailingMean(hourly?.nitrogen_dioxide ?? [], end, AIR_MEAN_HOURS),
+    // The standard's CO row is in mg/m³; the feed reports µg/m³.
+    co: scaleToMg(trailingMean(hourly?.carbon_monoxide ?? [], end, AIR_MEAN_HOURS)),
+    o3_8h: maxRunningMean(hourly?.ozone ?? [], dayStart, end, AIR_O3_WINDOW),
+    // Only consulted when the 8 h mean clears the table's ceiling (表 1 注 3).
+    o3_1h: raw?.current?.ozone ?? undefined,
+  }
+  const result = computeAqi(concentrations)
+  const air: AirQuality = {
+    aqi: result?.aqi,
+    primary: result?.primary === undefined ? undefined : POLLUTANT_LABEL[result.primary],
+    // The card also shows PM2.5 on its own; it takes the same 24 h mean the index used,
+    // or the two numbers on one card would be answering different questions.
+    pm25: concentrations.pm25,
+    pm10: concentrations.pm10,
+    // Instantaneous on purpose: a sandstorm is a short event and the 24 h mean hides it.
+    dust: raw?.current?.dust ?? undefined,
+    concentrations: {
+      pm25: concentrations.pm25,
+      pm10: concentrations.pm10,
+      so2: concentrations.so2,
+      no2: concentrations.no2,
+      co: concentrations.co,
+      o3: concentrations.o3_8h,
+    },
+  }
+  return air.aqi === undefined && air.pm25 === undefined && air.dust === undefined ? undefined : air
 }
 
 // ── Requests ────────────────────────────────────────────────────────────────
@@ -413,7 +573,12 @@ export async function fetchWeather(location: GeoLocation, signal?: AbortSignal):
   const airParams = new URLSearchParams({
     latitude: String(location.latitude),
     longitude: String(location.longitude),
-    current: 'us_aqi,pm2_5',
+    // `hourly` + `past_days` exist to build the 24 h means HJ 633-2012 grades on;
+    // `current` alone would only offer instantaneous readings that table cannot take.
+    // `current` additionally carries `dust`, which must NOT be averaged.
+    current: AIR_CURRENT_VARIABLES,
+    hourly: AIR_VARIABLES,
+    past_days: '1',
     timezone: 'auto',
   })
   // Both requests start in parallel; the forecast is awaited first so its JSON
@@ -473,6 +638,11 @@ export interface DayHourlyPoint {
   windSpeed?: number
   /** Relative humidity (%), absent when unreported. */
   humidity?: number
+  /** Precipitation rate for this hour (mm/h), absent when unreported — lets the detail
+   * strip describe an hour from its measured rate instead of its weather code. */
+  precipitation?: number
+  /** Snowfall for this hour (cm/h, water equivalent), absent when unreported. */
+  snowfall?: number
 }
 
 /** One date's detail: hourly points plus the day's summary. */
@@ -503,7 +673,7 @@ export async function fetchDayDetail(location: GeoLocation, date: string, signal
     longitude: String(location.longitude),
     start_date: date,
     end_date: date,
-    hourly: 'temperature_2m,weather_code,is_day,precipitation_probability,wind_speed_10m,relative_humidity_2m',
+    hourly: 'temperature_2m,weather_code,is_day,precipitation_probability,wind_speed_10m,relative_humidity_2m,precipitation,snowfall',
     daily: 'sunrise,sunset,precipitation_sum,wind_gusts_10m_max',
     timezone: 'auto',
     language: 'zh',
@@ -519,6 +689,8 @@ export async function fetchDayDetail(location: GeoLocation, date: string, signal
       precipitation_probability?: (number | null)[]
       wind_speed_10m?: (number | null)[]
       relative_humidity_2m?: (number | null)[]
+      precipitation?: (number | null)[]
+      snowfall?: (number | null)[]
     }
     daily?: {
       sunrise?: string[]
@@ -545,6 +717,8 @@ export async function fetchDayDetail(location: GeoLocation, date: string, signal
       isDay: (hourIsDay[index] ?? 1) === 1,
       windSpeed: hourly?.wind_speed_10m?.[index] ?? undefined,
       humidity: hourly?.relative_humidity_2m?.[index] ?? undefined,
+      precipitation: hourly?.precipitation?.[index] ?? undefined,
+      snowfall: hourly?.snowfall?.[index] ?? undefined,
     })),
     sunrise: daily?.sunrise?.[0],
     sunset: daily?.sunset?.[0],

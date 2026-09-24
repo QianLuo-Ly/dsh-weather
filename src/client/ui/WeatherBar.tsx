@@ -9,7 +9,7 @@ import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type Weat
 import { evaluateAlerts } from '../data/alerts'
 import { CURRENT_LOCATION_LABEL } from '../data/geolocation'
 import { compactDistance, msToNextMinute, pctText } from '../shared/format'
-import { describeSky, rainGrade24h, snowGrade24h } from '../data/describe'
+import { describeSky, rainGrade24h, skyEvidenceOf, snowGrade24h } from '../data/describe'
 import {
   aqiInfo,
   clockDate,
@@ -244,7 +244,9 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   // Read-only connections silently drop writes — disable the controls instead
   // of letting them look like they worked.
   const writable = scope.getSnapshot().writable
-  const condition = data !== null ? describeSky(data.current) : null
+  // Evidence, plus the PM concentrations the air feed brings: without them a dust event
+  // would be graded 霾 — see `dustDescription`.
+  const condition = data !== null ? describeSky(skyEvidenceOf(data.current, data.air)) : null
   const unitSuffix = unitLabel(units)
   const windSuffixLabel = windUnitLabel(units)
 
@@ -304,7 +306,9 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
   const todayItems: TodayFactItem[] = []
   if (data?.sunrise !== undefined) todayItems.push(fact('sunrise', timeLabel(data.sunrise)))
   if (data?.sunset !== undefined) todayItems.push(fact('sunset', timeLabel(data.sunset)))
-  if (data?.uvIndexMax !== undefined) todayItems.push(fact('sun', `UV ${Math.round(data.uvIndexMax)} ${uvLevel(data.uvIndexMax)}`))
+  // `uvIndexMax` is the day's PEAK, so say so: at dusk a bare "UV 8 强" reads as a
+  // warning about right now, when the sun is already low.
+  if (data?.uvIndexMax !== undefined) todayItems.push(fact('sun', `UV 峰值 ${Math.round(data.uvIndexMax)} ${uvLevel(data.uvIndexMax)}`))
   if (air?.pm25 !== undefined) todayItems.push(fact(undefined, `PM2.5 ${Math.round(air.pm25)}`))
   if (windTextValue !== undefined) todayItems.push(fact('wind', windTextValue))
   if (gustTextValue !== undefined) todayItems.push(fact('wind', `阵风 ${gustTextValue}`))

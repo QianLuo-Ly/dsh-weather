@@ -5,7 +5,8 @@
  */
 import { useEffect, useRef } from 'react'
 import { parseClockTime, type WeatherConfig } from '../../config-shared'
-import { describeCondition } from '../data/condition'
+import { RAIN_CODES, describeCondition } from '../data/condition'
+import { rainGrade24h } from '../data/describe'
 import { msToNextMinute } from '../shared/format'
 import { dayKey, payloadMatchesLocation } from '../data/location-match'
 import { tempText } from '../shared/units'
@@ -110,11 +111,22 @@ export function useDailyBrief(options: {
       // Skip rather than announce `0°C ~ 0°C` — the feed may omit a day's temps.
       if (day.tempMin === undefined || day.tempMax === undefined) return null
       const condition = describeCondition(day.weatherCode, true)
+      // A rain day is named by its GB/T 28592-2012 accumulation grade rather than by the
+      // code's own word: the code table says 毛毛雨/细雨 where the grade says 小雨/中雨, and
+      // the bar already speaks the grade. Thunder and snow keep their labels — a grade
+      // would flatten a 雷阵雨 down to however many millimetres it happened to drop.
+      const rainGrade = day.precipSum === undefined ? undefined : rainGrade24h(day.precipSum)
+      const label = RAIN_CODES.has(day.weatherCode)
+        && rainGrade !== undefined
+        && rainGrade !== '无降水'
+        && rainGrade !== '微量'
+        ? rainGrade
+        : condition.label
       const range = `${tempText(day.tempMin, effective.units)} ~ ${tempText(day.tempMax, effective.units)}`
       const rain = day.precipProb !== undefined && day.precipProb > 0 ? ` · 降水 ${day.precipProb}%` : ''
       return {
         title: `${slot === 'morning' ? '☀️ 今日天气' : '🌙 明日天气'} · ${placeName}`,
-        body: `${condition.emoji} ${condition.label} ${range}${rain}`,
+        body: `${condition.emoji} ${label} ${range}${rain}`,
       }
     }
 

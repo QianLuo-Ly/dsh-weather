@@ -30,7 +30,8 @@ import {
   type DayDetail,
   type WeatherData,
 } from '../data/weather-api'
-import { CONDITION_EMOJIS, describeCondition, rainOnsetRounded } from '../data/condition'
+import { CONDITION_EMOJIS, rainOnsetRounded } from '../data/condition'
+import { DESCRIBE_EMOJIS, describeSky, glyphEmoji, skyEvidenceOf } from '../data/describe'
 import { payloadMatchesLocation } from '../data/location-match'
 import { tempText, windText } from '../shared/units'
 
@@ -50,7 +51,10 @@ const NOTIFY_DEDUPE_MAX = 24
  * itself each write. Emoji list comes from `condition.ts`, the label segment is
  * required, and the optional sign covers sub-zero `tempText` output.
  */
-const TITLE_PREFIX_RE = new RegExp(`^(?:${CONDITION_EMOJIS.join('|')}) \\S+ -?\\d+°[CF] .+? — `)
+/** Emoji this plugin may have written into the title — from either description layer, so a
+ * title written before the switch to {@link describeSky} is still recognised and stripped. */
+const TITLE_EMOJIS = [...new Set([...CONDITION_EMOJIS, ...DESCRIBE_EMOJIS])]
+const TITLE_PREFIX_RE = new RegExp(`^(?:${TITLE_EMOJIS.join('|')}) \\S+ -?\\d+°[CF] .+? — `)
 
 /**
  * `addCurrent` refuses to save the automatic location while its name is still
@@ -863,9 +867,12 @@ export function useTabTitle(options: {
       const match = current.match(TITLE_PREFIX_RE)
       baseTitleRef.current = match !== null ? current.slice(match[0].length) : current
     }
-    const condition = describeCondition(data.current.weatherCode, data.current.isDay)
+    // Same source as the bar's own description line — the measured evidence, not the
+    // weather code. Reading the code here let the tab announce 「🌦️ 毛毛雨」 for an hour the
+    // bar was calling 「小雨」, off one and the same reading.
+    const sky = describeSky(skyEvidenceOf(data.current, data.air))
     // Label rides with the emoji: 🌧 alone spans 小雨 through 中雨.
-    const title = `${condition.emoji} ${condition.label} ${tempText(data.current.temperature, effective.units)} ${placeName} — ${baseTitleRef.current ?? current}`
+    const title = `${glyphEmoji(sky.glyph)} ${sky.label} ${tempText(data.current.temperature, effective.units)} ${placeName} — ${baseTitleRef.current ?? current}`
     if (document.title !== title) document.title = title
     lastWrittenRef.current = title
   }, [data, effective.enabled, effective.units, placeName, status])

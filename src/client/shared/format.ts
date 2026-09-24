@@ -24,11 +24,19 @@ export function rateText(mmPerHour: number): string {
 }
 
 /**
- * Distance text: a sub-10 reading keeps one decimal (`4.5`), anything larger is
- * rounded. Sub-10 km is where a fog/haze reading lives, so 0.4 km must not become "0".
+ * Distance text: a sub-10 reading keeps one decimal and is TRUNCATED, not rounded;
+ * anything larger is rounded. Sub-10 km is where the fog/haze judgement lives, so 0.4 km
+ * must not become "0" — and 9.96 km must not become "10.0", which sits on the wrong side
+ * of the very threshold the caller is quoting it to justify.
  */
 export function compactDistance(kilometres: number): string {
-  return kilometres < 10 ? kilometres.toFixed(1) : String(Math.round(kilometres))
+  if (kilometres < 10) {
+    const truncated = Math.floor(kilometres * 10) / 10
+    // Truncation must not flatten a real reading to "0.0": that would claim less
+    // visibility than the fog it describes.
+    return truncated >= 0.1 ? truncated.toFixed(1) : kilometres.toFixed(2)
+  }
+  return String(Math.round(kilometres))
 }
 
 /** `72%` — a percentage rounded to a whole number. */

@@ -13,6 +13,12 @@ import {
   DELUGE_6H_MM,
   DELUGE_RED_3H_MM,
   DOWNPOUR_24H_MM,
+  DUST_CONCENTRATION_MIN,
+  DUST_EXTREME_VIS_KM,
+  DUST_FINE_RATIO_MAX,
+  DUST_PM10_FLOOR,
+  DUST_PM10_MIN,
+  DUST_SEVERE_VIS_KM,
   FOG_VIS_KM,
   FREEZING_RAIN_CODES,
   HAZE_MILD_VIS_KM,
@@ -31,10 +37,12 @@ import {
   SNOW_MODERATE_24H_MM,
   SNOWSTORM_24H_MM,
   THUNDER_CODES,
+  WIND_LEVEL3_KMH,
   describeCondition,
 } from './condition'
 // Numeric formatting lives only in format.ts.
 import { compactDistance, pctText, rateText } from '../shared/format'
+import type { CurrentWeather, WeatherData } from './weather-api'
 
 /**
  * Icon kinds, deliberately not keyed by WMO code: the icon follows the conclusion
@@ -80,6 +88,18 @@ export interface SkyEvidence {
   cloudCover?: number
   /** WMO code, used only for the freezing-rain category and the "maybe thunder" hint. */
   weatherCode?: number
+  /** Sustained wind (km/h); tells 浮尘 from 扬沙 by GB/T 20480-2017. */
+  windSpeed?: number
+  /**
+   * CAMS 沙尘浓度 (µg/m³), instantaneous — the PRIMARY dust evidence. The feed's
+   * `visibility` cannot serve that role: it is a different model and does not move with
+   * the particles (measured r = -0.19 over 30 h at 库尔勒, dust peaking at 997 µg/m³).
+   */
+  dust?: number
+  /** PM10 24 h mean (µg/m³) — the fallback dust test when `dust` is unreported. */
+  pm10?: number
+  /** PM2.5 24 h mean (µg/m³) — the other half of that fallback. */
+  pm25?: number
   isDay: boolean
 }
 
@@ -122,6 +142,143 @@ export function glyphForCode(code: number, isDay: boolean): SkyGlyph {
   if (code === 77) return 'snow-grains'
   if (code === 95 || code === 96 || code === 99) return 'thunder'
   return 'unknown'
+}
+
+/**
+ * Every glyph's emoji, for the places that carry text only — the browser tab title has
+ * no room for an icon component, yet must say the same thing the bar says.
+ */
+const GLYPH_EMOJI: Record<SkyGlyph, string> = {
+  'clear-day': '☀️',
+  'clear-night': '🌙',
+  'partly-day': '🌤️',
+  'partly-night': '☁️',
+  cloudy: '☁️',
+  fog: '🌫️',
+  drizzle: '🌦️',
+  'rain-light': '🌧️',
+  rain: '🌧️',
+  'rain-heavy': '🌧️',
+  'freezing-rain': '🧊',
+  'freezing-rain-heavy': '🧊',
+  'snow-light': '❄️',
+  snow: '🌨️',
+  'snow-heavy': '⛄',
+  'snow-grains': '🧊',
+  thunder: '⛈️',
+  unknown: '🌡️',
+}
+
+/** The emoji for a description's glyph — the tab title's half of {@link describeSky}. */
+export function glyphEmoji(glyph: SkyGlyph): string {
+  return GLYPH_EMOJI[glyph]
+}
+
+/** Every emoji {@link glyphEmoji} can return, so consumers can recognise a title they wrote. */
+export const DESCRIBE_EMOJIS: string[] = [...new Set(Object.values(GLYPH_EMOJI))]
+
+/**
+ * The slice of an hourly point that describes its sky. Both hourly feeds carry these;
+ * neither carries cloud cover, visibility or humidity, so the visibility and cloud
+ * branches simply stay out of reach for an hourly slot.
+ */
+export interface HourlySky {
+  weatherCode?: number
+  isDay: boolean
+  precipitation?: number
+  showers?: number
+  snowfall?: number
+}
+
+/**
+ * Evidence from one hourly forecast point. Worth the detour: without it the hourly strip
+ * falls back to the weather code and can label an hour 毛毛雨 while the bar — reading the
+ * same hour's measured rate — calls it 小雨.
+ */
+export function skyEvidenceOfHourly(hour: HourlySky): SkyEvidence {
+  return {
+    precipitation: hour.precipitation,
+    showers: hour.showers,
+    snowfall: hour.snowfall,
+    weatherCode: hour.weatherCode,
+    isDay: hour.isDay,
+  }
+}
+
+/**
+ * Assemble the description evidence from the current observation plus the air-quality
+ * block. The two PM fields matter only for telling 沙尘 from 霾, and they ride in on a
+ * separate optional feed — with no air data the visibility branch simply grades 霾.
+ */
+export function skyEvidenceOf(current: CurrentWeather, air: WeatherData['air']): SkyEvidence {
+  return {
+    precipitation: current.precipitation,
+    rain: current.rain,
+    showers: current.showers,
+    snowfall: current.snowfall,
+    temperature: current.temperature,
+    humidity: current.humidity,
+    visibility: current.visibility,
+    cloudCover: current.cloudCover,
+    weatherCode: current.weatherCode,
+    isDay: current.isDay,
+    windSpeed: current.windSpeed,
+    dust: air?.dust,
+    pm10: air?.pm10,
+    pm25: air?.pm25,
+  }
+}
+
+/**
+ * 沙尘判识 — GB/T 20480-2017. QX/T 113-2010 requires 霾 to be judged only after dust is
+ * ruled out, and the two share the same visibility band; what separates them is particle
+ * SIZE. Dust lifts PM10 while fine particles stay a minority; haze is the reverse.
+ *
+ * BUT the test is NOT allowed to rest on visibility. The feed's `visibility` comes from a
+ * weather model while the particles come from an air-quality one, and the two disagree:
+ * measured over 30 h at 库尔勒, `dust` peaked at 997 µg/m³ while visibility sat flat at
+ * 26.9 km (r = -0.19). A visibility-gated dust test is therefore dead code — and a 沙尘 day
+ * gets advertised as 晴. So the primary evidence is CAMS' `dust`, with the particle-size
+ * test as the fallback when that field is unreported.
+ *
+ * Returns undefined when neither is available, so the caller grades 霾 as before.
+ */
+function dustDescription(e: SkyEvidence): SkyDescription | undefined {
+  const dust = finite(e.dust)
+  const pm10 = finite(e.pm10)
+  const pm25 = finite(e.pm25)
+  const coarse = pm10 !== undefined && pm10 >= DUST_PM10_MIN
+    && (pm25 === undefined || pm25 / pm10 < DUST_FINE_RATIO_MAX)
+  // dust 是主判，但必须由 PM10 佐证：CAMS 在沙漠边缘的背景偏高，实测张掖 dust 72 而
+  // PM10 只有 17 µg/m³，单看 dust 会误报。
+  const dustLead = dust !== undefined && dust >= DUST_CONCENTRATION_MIN
+    && pm10 !== undefined && pm10 >= DUST_PM10_FLOOR
+  if (!(dustLead || coarse)) return undefined
+  // Wet air at low visibility is 雾/轻雾, not dust.
+  const humidity = finite(e.humidity)
+  if (humidity !== undefined && humidity >= HAZE_RH_MAX) return undefined
+
+  // GB/T 20480-2017 的五个等级：能见度定级，浮尘与扬沙再按风力分开。能见度缺失或
+  // 停在 ≥ 10 km 时仍然算沙尘 —— 颗粒物已经证明了它，不能用一个不反映沙尘的字段否认。
+  const vis = finite(e.visibility)
+  let label: string
+  if (vis !== undefined && vis < DUST_EXTREME_VIS_KM) label = '特强沙尘暴'
+  else if (vis !== undefined && vis < DUST_SEVERE_VIS_KM) label = '强沙尘暴'
+  else if (vis !== undefined && vis < FOG_VIS_KM) label = '沙尘暴'
+  else if (vis !== undefined && vis < MIST_VIS_KM) {
+    label = e.windSpeed !== undefined && e.windSpeed > WIND_LEVEL3_KMH ? '扬沙' : '浮尘'
+  } else label = '浮尘'
+
+  // `fog` is the reduced-visibility glyph; there is no dust glyph to draw.
+  // Visibility goes into the basis ONLY when it actually fell. Writing 「能见度 38 公里」
+  // next to 「浮尘」 would let the evidence contradict its own conclusion — and that
+  // reading means nothing anyway, since this field does not track the particles. The
+  // concentration is the evidence here.
+  const visShown = vis !== undefined && vis < MIST_VIS_KM
+  const basis = dust !== undefined
+    ? `沙尘浓度 ${Math.round(dust)} µg/m³${visShown ? `，能见度 ${visText(vis)}` : ''}`
+    : `PM10 ${Math.round(pm10 ?? 0)} µg/m³，粗颗粒主导`
+  return { glyph: 'fog', label, basis, uncertain: false }
 }
 
 /**
@@ -198,8 +355,16 @@ export function describeSky(e: SkyEvidence): SkyDescription {
     return { glyph: 'rain-heavy', label: '大雨', basis, uncertain: false }
   }
 
-  // 4) No precipitation but visibility: QX/T 113-2010. Below 10 km the obscuration
-  // is 雾 (< 1 km), else 轻雾 or 霾 by humidity, with 霾 graded by how far it fell.
+  // 4) 沙尘 — FIRST, and deliberately OUTSIDE the visibility gate. The feed's visibility
+  // does not move with the particles (measured r = -0.19 at 库尔勒 while `dust` hit
+  // 997 µg/m³), so gating this on `vis < 10 km` would keep the whole branch from ever
+  // running. Tested across the whole band, including < 1 km, which 雾 would otherwise
+  // claim for itself.
+  const dust = dustDescription(e)
+  if (dust !== undefined) return dust
+
+  // 5) No precipitation and reduced visibility: QX/T 113-2010 — 雾 (< 1 km), else 轻雾 or
+  // 霾 by humidity, with 霾 graded by how far visibility fell.
   const vis = finite(e.visibility)
   if (vis !== undefined && vis < MIST_VIS_KM) {
     const humidity = finite(e.humidity)
@@ -219,7 +384,7 @@ export function describeSky(e: SkyEvidence): SkyDescription {
     return { glyph: 'fog', label: '轻微霾', basis, uncertain: false }
   }
 
-  // 5) Cloud-cover grading (GB/T 35663-2017 成数).
+  // 6) Cloud-cover grading (GB/T 35663-2017 成数).
   const cloud = finite(e.cloudCover)
   if (cloud !== undefined) {
     const basis = `云量 ${pctText(cloud)}`
@@ -229,7 +394,7 @@ export function describeSky(e: SkyEvidence): SkyDescription {
     return { glyph: 'cloudy', label: '阴', basis, uncertain: false }
   }
 
-  // 6) Fallback: only the code is left — it still says whether it rains, little more.
+  // 7) Fallback: only the code is left — it still says whether it rains, little more.
   const info = describeCondition(code, e.isDay)
   return { glyph: glyphForCode(code, e.isDay), label: info.label, uncertain: false }
 }

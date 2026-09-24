@@ -25,3 +25,6 @@ scripts/set-manual-panyu.mjs
 
 # 上架准备草稿（PR 条目文件等）
 .release/
+
+# 探针工具的每次运行产物（重跑即重新生成）
+scripts/*-report.txt

@@ -65,6 +65,7 @@ global.window = { setTimeout, clearTimeout }
 const X = loadModules([
   'src/client/shared/format.ts',
   'src/config-shared.ts',
+  'src/client/data/aqi.ts',
   'src/client/data/alerts.ts',
   'src/client/data/geolocation.ts',
   'src/client/data/describe.ts',
@@ -110,6 +111,10 @@ eq('rateText one decimal', X.rateText(3.24), '3.2 mm/h')
 eq('compactDistance keeps a decimal under 10', X.compactDistance(4.52), '4.5')
 eq('compactDistance rounds at 10 and above', X.compactDistance(12.4), '12')
 eq('compactDistance does not erase a sub-kilometre reading', X.compactDistance(0.4), '0.4')
+// The fog/haze judgement line IS "below 10 km", so 9.96 must not round up to 10.0 —
+// the basis line would then contradict the very conclusion drawn from it.
+eq('compactDistance truncates rather than rounding into 10', X.compactDistance(9.96), '9.9')
+eq('compactDistance: 9.99 still reads as 9.9', X.compactDistance(9.99), '9.9')
 eq('pctText rounds', X.pctText(71.6), '72%')
 ok('msToNextMinute lands just after the boundary', X.msToNextMinute() > 20 && X.msToNextMinute() <= 60_200)
 
@@ -130,11 +135,12 @@ eq('severity: a clear code ignores the wind entirely', X.severityOfCode(0, 0, 12
 
 // ── Alert wording ───────────────────────────────────────────────────────────
 
-const sample = (current = {}, hourly = []) => ({
+const sample = (current = {}, hourly = [], air) => ({
   location: { name: 'x', latitude: 1, longitude: 2, source: 'ip' },
   current: { temperature: 25, apparentTemperature: 25, weatherCode: 0, isDay: true, ...current },
   hourly,
   daily: [],
+  ...(air === undefined ? {} : { air }),
 })
 const fmt = (value) => `${Math.round(value)}°C`
 const alertsOf = (data) => X.evaluateAlerts(data, fmt)
@@ -187,6 +193,31 @@ eq('describe: 4 km at 60% humidity is 轻度霾', X.describeSky({ weatherCode: 2
 eq('describe: 1.5 km at 60% humidity is 重度霾', X.describeSky({ weatherCode: 2, visibility: 1.5, humidity: 60, isDay: true }).label, '重度霾')
 eq('describe: 8 km at 90% humidity is 轻雾, not 霾', X.describeSky({ weatherCode: 2, visibility: 8, humidity: 90, isDay: true }).label, '轻雾')
 eq('describe: 12 km leaves the sky to cloud cover', X.describeSky({ weatherCode: 0, visibility: 12, humidity: 60, cloudCover: 5, isDay: true }).label, '晴')
+
+// 沙尘（GB/T 20480-2017）：主判是 CAMS 的 `dust` 浓度，**不是能见度** —— 数据源的
+// 能见度与颗粒物不同源（实测库尔勒 dust 997 µg/m³ 时能见度仍报 26.9 km，r = -0.19），
+// 拿能见度当门会让整段判识永不触发，沙尘天报「晴」。下面头两条就是这个回归防线。
+eq('describe: dust 高而能见度不降，仍判浮尘', X.describeSky({ weatherCode: 0, visibility: 27, humidity: 30, dust: 400, pm10: 300, isDay: true }).label, '浮尘')
+eq('describe: dust 高且能见度缺失，仍判浮尘', X.describeSky({ weatherCode: 0, humidity: 30, dust: 400, pm10: 300, isDay: true }).label, '浮尘')
+eq('describe: 沙尘的依据写的是浓度', X.describeSky({ weatherCode: 0, visibility: 27, humidity: 30, dust: 400, pm10: 300, isDay: true }).basis, '沙尘浓度 400 µg/m³')
+eq('describe: 能见度真的降了才写进沙尘依据', X.describeSky({ weatherCode: 0, visibility: 6, humidity: 30, dust: 400, pm10: 300, windSpeed: 5, isDay: true }).basis, '沙尘浓度 400 µg/m³，能见度 6.0 公里')
+eq('describe: dust 高 + 风超 3 级（能见度 8 km）→ 扬沙', X.describeSky({ weatherCode: 2, visibility: 8, humidity: 25, dust: 200, pm10: 200, windSpeed: 30, isDay: true }).label, '扬沙')
+eq('describe: dust 高 + 能见度 0.8 km → 沙尘暴', X.describeSky({ weatherCode: 2, visibility: 0.8, humidity: 25, dust: 600, pm10: 300, windSpeed: 30, isDay: true }).label, '沙尘暴')
+// 高湿时低能见度是水汽，不是沙尘。
+eq('describe: dust 高但湿度 90% 仍是轻雾', X.describeSky({ weatherCode: 2, visibility: 8, humidity: 90, dust: 400, pm10: 300, isDay: true }).label, '轻雾')
+// 张掖实测：dust 72 过了浓度门，而 PM10 只有 17 µg/m³ —— CAMS 在沙漠边缘的背景偏高，
+// 单看 dust 会把一片干净空气说成浮尘。PM10 佐证就是为了挡这个。
+eq('describe: dust 过线但 PM10 很低不算沙尘', X.describeSky({ weatherCode: 0, visibility: 36, humidity: 23, dust: 72, pm10: 17, cloudCover: 5, isDay: true }).label, '晴')
+eq('describe: dust 低于门槛（背景值 12）不算沙尘', X.describeSky({ weatherCode: 0, visibility: 27, humidity: 40, dust: 12, pm10: 30, cloudCover: 5, isDay: true }).label, '晴')
+// 没有 dust 时退回颗粒物粒径判据：粗颗粒主导才是沙尘。
+eq('describe: coarse particles + dry air is 浮尘, not 霾', X.describeSky({ weatherCode: 2, visibility: 3, humidity: 25, pm10: 200, pm25: 40, windSpeed: 8, isDay: true }).label, '浮尘')
+eq('describe: a wind over 3 级 turns it into 扬沙', X.describeSky({ weatherCode: 2, visibility: 3, humidity: 25, pm10: 200, pm25: 40, windSpeed: 30, isDay: true }).label, '扬沙')
+eq('describe: below 1 km the dust grades as 沙尘暴', X.describeSky({ weatherCode: 2, visibility: 0.8, humidity: 25, pm10: 300, pm25: 40, windSpeed: 30, isDay: true }).label, '沙尘暴')
+// 细颗粒主导就是霾，不是沙尘。
+eq('describe: fine particles still grade as 霾', X.describeSky({ weatherCode: 2, visibility: 3, humidity: 25, pm10: 200, pm25: 150, isDay: true }).label, '轻度霾')
+eq('describe: PM10 below the dust line stays 霾', X.describeSky({ weatherCode: 2, visibility: 3, humidity: 25, pm10: 80, pm25: 20, isDay: true }).label, '轻度霾')
+// 拿不到任何颗粒物信息就不敢断言沙尘，退回霾的判识。
+eq('describe: no PM data falls back to 霾', X.describeSky({ weatherCode: 2, visibility: 3, humidity: 25, isDay: true }).label, '轻度霾')
 // GB/T 35663-2017 成数: 晴 0–2, 少云 3–5, 多云 6–8, 阴 9–10.
 eq('describe: 60% cloud cover is 多云', X.describeSky({ weatherCode: 3, cloudCover: 60, isDay: true }).label, '多云')
 eq('describe: 90% cloud cover is 阴', X.describeSky({ weatherCode: 3, cloudCover: 90, isDay: true }).label, '阴')
@@ -199,9 +230,42 @@ eq('uv: 2 is 最弱', X.uvLevel(2), '最弱')
 eq('uv: 4 is 弱', X.uvLevel(4), '弱')
 eq('uv: 8 is 强', X.uvLevel(8), '强')
 eq('uv: 10 is 很强', X.uvLevel(10), '很强')
+
+// ── 中国 AQI（HJ 633-2012，自算） ────────────────────────────────────────────
+// 数据源的 us_aqi 是美国 EPA 口径，同一片空气给出的数不同：PM2.5 = 75 µg/m³
+// 按国标是「良」(100)，按美国口径已经是「轻度污染」(≈161)。所以指数自己算。
+
+eq('aqi: PM2.5 = 75 是 良(100)，不是美国口径的中度', X.computeAqi({ pm25: 75 }).aqi, 100)
+eq('aqi: 首要污染物取到最大值那一项', X.computeAqi({ pm25: 75, pm10: 20 }).primary, 'pm25')
+eq('aqi: 六项取最大而不是求和', X.computeAqi({ pm25: 35, o3_8h: 215 }).aqi, 150)
+eq('aqi: 优档（≤ 50）不报首要污染物', X.computeAqi({ pm25: 10 }).primary, undefined)
+eq('aqi: 全部缺测返回 undefined，不冒充 0', X.computeAqi({}), undefined)
+eq('aqi: CO 按 mg/m³ 分段（4 = 100）', X.computeAqi({ co: 4 }).aqi, 100)
+eq('aqi: PM10 = 150 是 良(100)', X.computeAqi({ pm10: 150 }).aqi, 100)
+eq('aqi: SO2 = 150 是 良(100)', X.computeAqi({ so2: 150 }).aqi, 100)
+eq('aqi: NO2 = 80 是 良(100)', X.computeAqi({ no2: 80 }).aqi, 100)
+eq('aqi: 浓度越高分指数越高', X.computeAqi({ pm25: 115 }).aqi > X.computeAqi({ pm25: 75 }).aqi, true)
+// 表 1 注 3：O3 的 8 小时均值越过 800 µg/m³ 就改用 1 小时平均。
+eq('aqi: O3 8 h over 800 switches to the 1 h table', X.computeAqi({ o3_8h: 900, o3_1h: 200 }).aqi, 100)
+eq('aqi: over 800 with no 1 h value drops O3 instead of misusing the table', X.computeAqi({ o3_8h: 900 }), undefined)
 eq('durationLabel: 375 minutes', X.durationLabel(375), '6.5 小时')
 eq('advice: a clear 50 km/h day is not "适合户外活动"', X.weatherAdvice(sample({ windSpeed: 50 })).text, '风力较大，注意高空坠物')
 eq('advice: a clear 35 km/h day is still calm', X.weatherAdvice(sample({ windSpeed: 35 })).text, '天气晴好，适合户外活动')
+
+// 建议优先级：重度污染压过降水提示（吸霾是健康问题），中度及以下仍让位于降水。
+eq('advice: 重度污染压过降水提示', X.weatherAdvice(sample({ weatherCode: 61 }, [], { aqi: 250 })).text, '空气重度污染，外出建议佩戴口罩')
+eq('advice: 中度污染不抢降水的位', X.weatherAdvice(sample({ weatherCode: 61 }, [], { aqi: 160 })).text, '有降水，出门记得带伞')
+eq('advice: 无降水时中度污染仍会提示', X.weatherAdvice(sample({ weatherCode: 3 }, [], { aqi: 160 })).text, '空气质量较差，外出建议佩戴口罩')
+
+// ── 口径统一：逐小时槽位也走证据层 ──────────────────────────────────────────
+// 不这样做，tab 标题与逐小时图标会读天气码，说出与描述行不同的名字。
+
+eq('hourly evidence: 0.3 mm/h reads 小雨, not the code’s 毛毛雨',
+  X.describeSky(X.skyEvidenceOfHourly({ precipitation: 0.3, weatherCode: 51, isDay: true })).label, '小雨')
+eq('hourly evidence: a dry hour falls back to the code',
+  X.describeSky(X.skyEvidenceOfHourly({ weatherCode: 2, isDay: true })).label, '多云')
+eq('glyphEmoji: every glyph maps to an emoji', typeof X.glyphEmoji('rain-light'), 'string')
+eq('glyphEmoji: clear night keeps the moon', X.glyphEmoji('clear-night'), '🌙')
 
 // ── Daily grades (GB/T 28592-2012) ──────────────────────────────────────────
 
@@ -285,7 +349,25 @@ const forecastPayload = {
   },
   utc_offset_seconds: OFFSET_S,
 }
-const airPayload = { current: { us_aqi: 42, pm2_5: 12.5 } }
+// Air feed: `current` is instantaneous, `hourly` is where the 24 h means come from.
+// Concentrations are round numbers on purpose — PM2.5 24 h mean 75 → IAQI 100 (良), a reading
+// the US EPA scale would have called 轻度污染 (≈161). That gap is the whole reason for computing.
+const AIR_BACK_HOURS = 30
+const airTimes = Array.from({ length: 48 }, (_, i) => localIso(hourBefore - AIR_BACK_HOURS * HOUR + i * HOUR))
+const flat = (value) => airTimes.map(() => value)
+const airPayload = {
+  current: { time: localIso(Date.now()), ozone: 90, dust: 8 },
+  hourly: {
+    time: airTimes,
+    pm2_5: flat(75),
+    pm10: flat(50),
+    carbon_monoxide: flat(400),
+    nitrogen_dioxide: flat(20),
+    sulphur_dioxide: flat(10),
+    // 8 h running mean 90 → IAQI 45, under PM2.5's 100, so PM2.5 stays primary.
+    ozone: flat(90),
+  },
+}
 
 let mode = 'ok'
 global.fetch = async (url) => {
@@ -348,8 +430,13 @@ const expectRejection = async (label, run, message) => {
   eq('fetch: a one-step spell lasts 15 minutes', data.rainSoon.durationMinutes, 15)
   eq('fetch: the window covers every step', data.rainSoon.windowMinutes, 360)
 
-  eq('fetch: air quality rides along', data.air.aqi, 42)
-  eq('fetch: PM2.5 rides along', data.air.pm25, 12.5)
+  // The index is computed from the 24 h means, not lifted from the feed's own AQI.
+  eq('fetch: AQI is computed per HJ 633-2012', data.air.aqi, 100)
+  eq('fetch: the primary pollutant is named in Chinese', data.air.primary, 'PM2.5')
+  eq('fetch: the PM2.5 on the card is the 24 h mean', data.air.pm25, 75)
+  eq('fetch: CO is converted µg/m³ → mg/m³', data.air.concentrations.co, 0.4)
+  // dust 走瞬时值：沙尘是短时事件，取 24 h 均值会把它抹平。
+  eq('fetch: dust rides along as an instantaneous reading', data.air.dust, 8)
 
   mode = 'empty'
   await expectRejection('fetch: an empty body is an error', () => X.fetchWeather(LOCATION), '天气服务暂未返回数据，请稍后重试')
