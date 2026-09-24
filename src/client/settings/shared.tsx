@@ -3,10 +3,10 @@
  * inline styles and the callback types. Holds no settings state; the sections share one definition of "a row".
  */
 import { useEffect, useState, type CSSProperties, type ReactElement, type ReactNode } from 'react'
-import { BRIEF_TIMES, parseClockTime, type WeatherConfig } from '../config-shared'
-import { pad2 } from './format'
-import type { NoticeKind } from './hooks'
-import { SHADOW, TOKEN } from './theme'
+import { BRIEF_TIMES, parseClockTime, type WeatherConfig } from '../../config-shared'
+import { pad2 } from '../shared/format'
+import type { NoticeKind } from '../hooks/weather'
+import { SHADOW, TOKEN } from '../ui/theme'
 
 // Design tokens — single source is theme.ts; these aliases only shorten reads.
 export const FG = TOKEN.fg

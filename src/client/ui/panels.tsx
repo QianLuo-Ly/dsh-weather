@@ -4,13 +4,13 @@
  * testable/themeable alone. None touch settings, fetching or state.
  */
 import type { CSSProperties, ReactElement } from 'react'
-import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from './weather-api'
-import { MINUTE_STEP_MIN, RAIN_MM_PER_15MIN } from './weather-api'
-import { dayLabel, durationLabel, hourLabel, timeLabel } from './condition'
+import type { DailyPoint, DayDetail, HourlyPoint, MinutelyPoint } from '../data/weather-api'
+import { MINUTE_STEP_MIN, RAIN_MM_PER_15MIN } from '../data/weather-api'
+import { dayLabel, durationLabel, hourLabel, timeLabel } from '../data/condition'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
-import { glyphForCode } from './describe'
+import { glyphForCode } from '../data/describe'
 import { actionButton, NUM, PALETTE, TOKEN } from './theme'
-import { tempText, windText, type UnitSetting } from './units'
+import { tempText, windText, type UnitSetting } from '../shared/units'
 
 /** Rain-bar intensity ramp (mm per 15 min → color), shared with theme palette. */
 const RAIN_RAMP: Array<{ atLeast: number; color: string }> = [

@@ -3,8 +3,8 @@
  * value itself is held by the page because the brief section shows the same hint.
  */
 import { useId, type ReactElement } from 'react'
-import type { WeatherConfig } from '../config-shared'
-import { DANGER, MUTED, Row, checkbox, type FieldSetter } from './settings-shared'
+import type { WeatherConfig } from '../../config-shared'
+import { DANGER, MUTED, Row, checkbox, type FieldSetter } from './shared'
 
 export function TogglesSection(props: {
   effective: WeatherConfig

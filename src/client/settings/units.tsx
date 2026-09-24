@@ -2,8 +2,8 @@
  * Temperature unit and refresh interval; owns the refresh draft so a slider drag never fires a write per pixel.
  */
 import { useCallback, useEffect, useId, useRef, useState, type ReactElement } from 'react'
-import { REFRESH_RANGE, type WeatherConfig } from '../config-shared'
-import { ACCENT, Row, radioLabel, type FieldSetter } from './settings-shared'
+import { REFRESH_RANGE, type WeatherConfig } from '../../config-shared'
+import { ACCENT, Row, radioLabel, type FieldSetter } from './shared'
 
 /** How long keyboard nudges are coalesced before one settings write. */
 const REFRESH_KEY_COMMIT_DELAY_MS = 400

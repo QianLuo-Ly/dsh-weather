@@ -5,7 +5,7 @@
  */
 import { Fragment, type ReactElement } from 'react'
 import { PALETTE } from './theme'
-import type { SkyGlyph } from './describe'
+import type { SkyGlyph } from '../data/describe'
 
 /** Feather cloud (upper area). */
 const CLOUD = 'M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z'

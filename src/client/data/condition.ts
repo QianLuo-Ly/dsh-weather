@@ -4,7 +4,7 @@
  * own intensity glyph; the title also prints the label.
  */
 import type { WeatherData } from './weather-api'
-import { pad2 } from './format'
+import { pad2 } from '../shared/format'
 
 export interface ConditionInfo {
   label: string

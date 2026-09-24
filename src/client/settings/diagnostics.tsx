@@ -2,9 +2,9 @@
  * Location diagnostics: run the GPS/IP probes on demand and show the results. The run counter both labels a run and invalidates it, so a slow probe cannot overwrite a newer one and unmounting drops the answer.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import type { WeatherConfig } from '../config-shared'
-import { runLocationDiagnostics, type LocationDiagnostics } from './geolocation'
-import { BG_ROW, BORDER, FG, MUTED, inputButton, type Notify } from './settings-shared'
+import type { WeatherConfig } from '../../config-shared'
+import { runLocationDiagnostics, type LocationDiagnostics } from '../data/geolocation'
+import { BG_ROW, BORDER, FG, MUTED, inputButton, type Notify } from './shared'
 
 /** Chinese label for a browser-fix precision tier (see weather-api.ts). */
 function precisionLabel(precision: string | undefined): string {

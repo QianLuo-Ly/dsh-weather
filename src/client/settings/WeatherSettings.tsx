@@ -3,14 +3,14 @@
  */
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import { DEFAULT_WEATHER_CONFIG, sameConfig, sanitizeConfig, type WeatherConfig } from '../config-shared'
-import { useSavedLocations, writeVerified, type NoticeKind } from './hooks'
-import { BriefSection } from './settings-brief'
-import { DiagnosticsSection } from './settings-diagnostics'
-import { LocationSection } from './settings-location'
-import { TogglesSection } from './settings-toggles'
-import { UnitsSection } from './settings-units'
-import { DANGER, FG, MUTED, OK, useNotificationPermission, type FieldWriter, type Notify } from './settings-shared'
+import { DEFAULT_WEATHER_CONFIG, sameConfig, sanitizeConfig, type WeatherConfig } from '../../config-shared'
+import { useSavedLocations, writeVerified, type NoticeKind } from '../hooks/weather'
+import { BriefSection } from './brief'
+import { DiagnosticsSection } from './diagnostics'
+import { LocationSection } from './location'
+import { TogglesSection } from './toggles'
+import { UnitsSection } from './units'
+import { DANGER, FG, MUTED, OK, useNotificationPermission, type FieldWriter, type Notify } from './shared'
 
 /**
  * Replay an already-refused write on the unfenced path; supplied by the plugin entry, which needs the remote service.

@@ -1,7 +1,7 @@
 /**
  * Location/payload agreement checks shared by the notification paths. The feed and the resolved location update independently, so for one render they can disagree; a consumer re-running on a name change (a city switch updates `placeName` a commit before the payload) would otherwise report the new city with old conditions, and its dedupe key would suppress the real alert.
  */
-import { pad2 } from './format'
+import { pad2 } from '../shared/format'
 import type { GeoLocation } from './geolocation'
 import type { WeatherData } from './weather-api'
 

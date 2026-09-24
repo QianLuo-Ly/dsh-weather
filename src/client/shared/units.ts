@@ -3,7 +3,7 @@
  * in weather-api.ts), so the cached payload is unit-independent and a unit toggle never re-fetches;
  * user-facing values convert here, keeping °F/mph ternaries out of the components.
  */
-import type { WeatherConfig } from '../config-shared'
+import type { WeatherConfig } from '../../config-shared'
 
 export type UnitSetting = WeatherConfig['units']
 

@@ -4,10 +4,10 @@
  * active row, outside-click guard, debounce) is local; the selected place is handed back through `savedCities.selectPlace`.
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
-import { MAX_NAME_LENGTH, MAX_SAVED_LOCATIONS, type WeatherConfig } from '../config-shared'
-import { Glyph } from './icons'
-import { searchCity, type GeoLocation } from './geolocation'
-import type { SavedLocationsState } from './hooks'
+import { MAX_NAME_LENGTH, MAX_SAVED_LOCATIONS, type WeatherConfig } from '../../config-shared'
+import { Glyph } from '../ui/icons'
+import { searchCity, type GeoLocation } from '../data/geolocation'
+import type { SavedLocationsState } from '../hooks/weather'
 import {
   ACCENT,
   DANGER,
@@ -23,7 +23,7 @@ import {
   suggestionPin,
   suggestionRow,
   suggestionStar,
-} from './settings-shared'
+} from './shared'
 
 export function CitySearchField(props: {
   effective: WeatherConfig

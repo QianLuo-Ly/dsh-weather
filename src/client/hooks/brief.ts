@@ -4,13 +4,13 @@
  * dedupe/scheduling state lives here, so `hooks.ts` never sees the storage keys.
  */
 import { useEffect, useRef } from 'react'
-import { parseClockTime, type WeatherConfig } from '../config-shared'
-import { describeCondition } from './condition'
-import { msToNextMinute } from './format'
-import { dayKey, payloadMatchesLocation } from './location-match'
-import { tempText } from './units'
-import type { GeoLocation } from './geolocation'
-import type { WeatherData } from './weather-api'
+import { parseClockTime, type WeatherConfig } from '../../config-shared'
+import { describeCondition } from '../data/condition'
+import { msToNextMinute } from '../shared/format'
+import { dayKey, payloadMatchesLocation } from '../data/location-match'
+import { tempText } from '../shared/units'
+import type { GeoLocation } from '../data/geolocation'
+import type { WeatherData } from '../data/weather-api'
 
 /** localStorage key prefix for the once-per-slot brief dedupe. */
 const BRIEF_KEY_PREFIX = 'dsh-weather-brief-'

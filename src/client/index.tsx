@@ -6,9 +6,9 @@ import type { Context } from '@deepseek-ai/cordis'
 // ui-conversation is present at runtime but not a compile-time dep, so `slotmap.d.ts` declares the seat.
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import { sanitizeConfig, WEATHER_NS, type WeatherConfig } from '../config-shared'
-import { WeatherBar } from './WeatherBar'
-import { WeatherSettingsSection, type WriteProbe } from './WeatherSettings'
-import { ensureWeatherStyles } from './styles'
+import { WeatherBar } from './ui/WeatherBar'
+import { WeatherSettingsSection, type WriteProbe } from './settings/WeatherSettings'
+import { ensureWeatherStyles } from './ui/styles'
 
 /**
  * Cordis service injection for the client fiber. `remote` is declared, not merely looked up: the fallback

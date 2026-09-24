@@ -2,11 +2,11 @@
  * 定位方式 block: auto/manual radios, the manual location editor (city search + coordinate and name drafts) and the saved-city list.
  */
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
-import { LAT_RANGE, LON_RANGE, MAX_NAME_LENGTH, type WeatherConfig } from '../config-shared'
-import type { SavedLocationsState } from './hooks'
-import { CitySearchField } from './settings-city-search'
-import { SavedCitiesList } from './settings-saved-cities'
-import { MUTED, Row, input, radioLabel, type FieldWriter, type Notify } from './settings-shared'
+import { LAT_RANGE, LON_RANGE, MAX_NAME_LENGTH, type WeatherConfig } from '../../config-shared'
+import type { SavedLocationsState } from '../hooks/weather'
+import { CitySearchField } from './city-search'
+import { SavedCitiesList } from './saved-cities'
+import { MUTED, Row, input, radioLabel, type FieldWriter, type Notify } from './shared'
 
 export function LocationSection(props: {
   effective: WeatherConfig

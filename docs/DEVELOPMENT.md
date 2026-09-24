@@ -53,17 +53,38 @@ src/config-shared.ts  # 共享配置类型 + 默认值 + 范围常量 + sanitize
 src/dsh-settings.d.ts # 本地 ctx.settings 类型 shim（见文件内注释）
 src/client/           # 浏览器半侧
   index.tsx           #   apply：注册 conversation.session.header.actions（天气 chip）+ settings.section（配置页）
-  WeatherBar.tsx      #   chip + 详情弹层的布局与交互（数据/副作用全部走 hooks）
-  hooks.ts            #   行为层：定位 + IP 漂移、数据抓取 + 降级、收藏城市、每日简报、通知、标签页标题、逐日详情
-  panels.tsx          #   弹层纯展示块（stat/rain/hourly/daily/facts/day-detail）
-  WeatherSettings.tsx #   设置页表单（本地草稿 + blur 提交校验、收藏城市管理、简报时间）
-  weather-api.ts      #   数据层：公制抓取、超时/取消、IP 共识定位、中文地理编码、告警评估、逐日详情
-  condition.ts        #   WMO 分类/阈值单一源 + 中文文案 + 时间格式化
-  units.ts            #   显示单位换算（°F/mph），数据层保持公制
-  theme.ts            #   设计 token / 调色板单一源
-  styles.ts           #   注入的少量全局样式
-  icons.tsx           #   WMO → SVG 图标 + 通用小图标
-  TrendChart.tsx      #   24h 温度 SVG 折线
+  slotmap.d.ts        #   SlotMap 席位声明增强（conversation.session.header.actions）
+  ui/                 #   展示层：组件与视觉资源
+    WeatherBar.tsx    #     chip + 详情弹层的布局与交互（数据/副作用全部走 hooks）
+    panels.tsx        #     弹层纯展示块（stat/rain/hourly/daily/facts/day-detail）
+    TrendChart.tsx    #     24h 温度 SVG 折线
+    icons.tsx         #     WMO → SVG 图标 + 通用小图标
+    theme.ts          #     设计 token / 调色板单一源
+    styles.ts         #     注入的少量全局样式
+  settings/           #   设置页：页面外壳 + 各分区（本地草稿 + blur 提交校验）
+    WeatherSettings.tsx #   页面外壳：分区编排、通知权限、写回与拒绝探针
+    shared.tsx        #     表单原语与色板（Row / checkbox / ClockField / inputButton）
+    location.tsx      #     定位方式、经纬度、城市搜索
+    city-search.tsx   #     中文城市搜索字段
+    saved-cities.tsx  #     收藏城市列表管理
+    brief.tsx         #     每日简报时间设置
+    toggles.tsx       #     显示 / 提醒开关
+    units.tsx         #     单位与刷新间隔
+    diagnostics.tsx   #     定位诊断面板
+  hooks/              #   行为层：副作用与状态
+    weather.ts        #     定位 + IP 漂移、数据抓取 + 降级、收藏城市、通知、标签页标题、逐日详情
+    brief.ts          #     每日简报调度（到点推送、补发窗口、每时段一次）
+  data/               #   数据层：抓取、解析、文案
+    weather-api.ts    #     公制抓取、超时/取消、IP 共识定位、中文地理编码、逐日详情
+    geolocation.ts    #     定位（GPS 优先、IP 兜底）、城市搜索、定位诊断
+    location-match.ts #     载荷与当前定位是否同一地点（漂移判定用）
+    condition.ts      #     WMO 分类/阈值单一源 + 中文文案 + 时间格式化
+    describe.ts       #     天气描述文案与分级（天空/雨雪强度）
+    alerts.ts         #     恶劣天气评估（按实测强度分级）
+  shared/             #   跨层通用工具
+    http.ts           #     带超时/取消的 fetch 封装
+    format.ts         #     数值与时间格式化
+    units.ts          #     显示单位换算（°F/mph），数据层保持公制
 scripts/build.mjs     # esbuild 构建脚本（委托 build-lib.mjs）
 scripts/check-lib-sync.mjs  # 校验 lib/ 与 src/ 同步（已接入 npm run check）
 scripts/check-encoding.mjs  # 扫描/修复双重编码乱码（UTF-8 被当作 GBK 再存回）

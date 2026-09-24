@@ -3,10 +3,10 @@
  * and writes live in `useSavedLocations`; this module is only the view over it.
  */
 import { useState, type ReactElement } from 'react'
-import { MAX_SAVED_LOCATIONS } from '../config-shared'
-import { CURRENT_LOCATION_LABEL } from './geolocation'
-import type { SavedLocationsState } from './hooks'
-import { ACCENT, BG_ROW, BORDER, DANGER, INPUT_BG, MUTED, inputButton } from './settings-shared'
+import { MAX_SAVED_LOCATIONS } from '../../config-shared'
+import { CURRENT_LOCATION_LABEL } from '../data/geolocation'
+import type { SavedLocationsState } from '../hooks/weather'
+import { ACCENT, BG_ROW, BORDER, DANGER, INPUT_BG, MUTED, inputButton } from './shared'
 
 export function SavedCitiesList(props: { savedCities: SavedLocationsState }): ReactElement {
   const { savedCities } = props

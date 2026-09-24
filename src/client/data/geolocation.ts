@@ -3,8 +3,8 @@
  * reverse geocoding, city search and the IP-drift check. All endpoints answer CORS.
  */
 // Coordinate quantum shared with placeKey: both must land on the same grid.
-import { PLACE_DECIMALS } from '../config-shared'
-import { apiFetch, withTimeout } from './http'
+import { PLACE_DECIMALS } from '../../config-shared'
+import { apiFetch, withTimeout } from '../shared/http'
 
 /**
  * Display name of the automatic "current location" entry — chip label, geocoder

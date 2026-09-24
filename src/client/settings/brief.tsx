@@ -2,8 +2,8 @@
  * 每日天气简报 switch and the two `HH:MM` time pickers; owns the optimistic clock draft, which lives and dies with the selects that consume it.
  */
 import { useCallback, useEffect, useId, useState, type ReactElement } from 'react'
-import { parseClockTime, type WeatherConfig } from '../config-shared'
-import { ClockField, DANGER, MUTED, Row, checkbox, type FieldSetter, type FieldWriter, type Notify } from './settings-shared'
+import { parseClockTime, type WeatherConfig } from '../../config-shared'
+import { ClockField, DANGER, MUTED, Row, checkbox, type FieldSetter, type FieldWriter, type Notify } from './shared'
 
 /** The two `HH:MM` brief times, in `WeatherConfig` spelling. */
 type ClockFieldName = 'briefMorning' | 'briefEvening'

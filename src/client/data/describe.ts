@@ -30,7 +30,7 @@ import {
   describeCondition,
 } from './condition'
 // Numeric formatting lives only in format.ts.
-import { compactDistance, pctText, rateText } from './format'
+import { compactDistance, pctText, rateText } from '../shared/format'
 
 /**
  * Icon kinds, deliberately not keyed by WMO code: the icon follows the conclusion

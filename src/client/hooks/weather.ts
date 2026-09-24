@@ -15,24 +15,24 @@ import {
   sanitizeText,
   type SavedLocation,
   type WeatherConfig,
-} from '../config-shared'
-import { evaluateAlerts } from './alerts'
+} from '../../config-shared'
+import { evaluateAlerts } from '../data/alerts'
 import {
   cityLevelName,
   CURRENT_LOCATION_LABEL,
   resolveAutoLocation,
   resolveFreshIfDrifted,
   type GeoLocation,
-} from './geolocation'
+} from '../data/geolocation'
 import {
   fetchDayDetail,
   fetchWeather,
   type DayDetail,
   type WeatherData,
-} from './weather-api'
-import { CONDITION_EMOJIS, describeCondition, rainOnsetRounded } from './condition'
-import { payloadMatchesLocation } from './location-match'
-import { tempText, windText } from './units'
+} from '../data/weather-api'
+import { CONDITION_EMOJIS, describeCondition, rainOnsetRounded } from '../data/condition'
+import { payloadMatchesLocation } from '../data/location-match'
+import { tempText, windText } from '../shared/units'
 
 /**
  * Minimum gap (ms) between IP-drift probes — a persist re-runs the location

@@ -63,13 +63,13 @@ const ok = (label, condition) => eq(label, condition === true, true)
 global.window = { setTimeout, clearTimeout }
 
 const X = loadModules([
-  'src/client/format.ts',
+  'src/client/shared/format.ts',
   'src/config-shared.ts',
-  'src/client/alerts.ts',
-  'src/client/geolocation.ts',
-  'src/client/describe.ts',
-  'src/client/condition.ts',
-  'src/client/weather-api.ts',
+  'src/client/data/alerts.ts',
+  'src/client/data/geolocation.ts',
+  'src/client/data/describe.ts',
+  'src/client/data/condition.ts',
+  'src/client/data/weather-api.ts',
 ], 'dshw-units')
 
 // ── deepEqual ───────────────────────────────────────────────────────────────

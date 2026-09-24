@@ -25,7 +25,7 @@ import {
 // Borrows only the short-duration deluge check from the description layer; no
 // thresholds are defined here.
 import { shortDurationDeluge } from './describe'
-import { rateText } from './format'
+import { rateText } from '../shared/format'
 import type { WeatherData } from './weather-api'
 
 /** One actionable severe-weather alert derived from the current conditions. */

@@ -5,11 +5,11 @@
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
 import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
-import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../config-shared'
-import { evaluateAlerts } from './alerts'
-import { CURRENT_LOCATION_LABEL } from './geolocation'
-import { compactDistance, msToNextMinute, pctText } from './format'
-import { describeSky, rainGrade24h, snowGrade24h } from './describe'
+import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../../config-shared'
+import { evaluateAlerts } from '../data/alerts'
+import { CURRENT_LOCATION_LABEL } from '../data/geolocation'
+import { compactDistance, msToNextMinute, pctText } from '../shared/format'
+import { describeSky, rainGrade24h, snowGrade24h } from '../data/describe'
 import {
   aqiInfo,
   clockDate,
@@ -21,7 +21,7 @@ import {
   uvLevel,
   weatherAdvice,
   windDirectionText,
-} from './condition'
+} from '../data/condition'
 import {
   placeNameOf,
   useAutoLocation,
@@ -31,13 +31,13 @@ import {
   useTabTitle,
   useWeatherFeed,
   useWeatherNotifications,
-} from './hooks'
-import { useDailyBrief } from './hooks-brief'
+} from '../hooks/weather'
+import { useDailyBrief } from '../hooks/brief'
 import { Glyph, WeatherIcon, type GlyphName } from './icons'
 import { DailyList, DayDetailPanel, HourlyStrip, RainStrip, StatChip, TodayFacts, type TodayFactItem } from './panels'
 import { TrendChart } from './TrendChart'
 import { NUM, TOKEN, actionButton, baseButton, BANNER, iconButton, segmentButton, SHADOW } from './theme'
-import { tempNumber, tempText, unitLabel, windNumber, windText, windUnitLabel } from './units'
+import { tempNumber, tempText, unitLabel, windNumber, windText, windUnitLabel } from '../shared/units'
 
 export interface WeatherBarProps {
   scope: SettingsScope<WeatherConfig>

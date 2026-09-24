@@ -3,7 +3,7 @@
  * per-day detail request, and their mapping into {@link WeatherData}. Fetched in
  * metric (°C / km/h / mm / hPa); display units are applied client-side.
  */
-import { apiFetch, withTimeout } from './http'
+import { apiFetch, withTimeout } from '../shared/http'
 import type { GeoLocation } from './geolocation'
 
 export interface CurrentWeather {
