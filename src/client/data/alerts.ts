@@ -12,9 +12,11 @@ import {
   GUST_DANGER_KMH,
   GUST_WARN_KMH,
   HEAT_DANGER_C,
+  HEAT_ORANGE_C,
   HEAT_WARN_C,
   HEAVY_RAIN_CODES,
   HEAVY_SNOW_CODES,
+  RAIN_DELUGE_MMH,
   RAIN_TORRENTIAL_MMH,
   RAIN_WARN_MMH,
   SNOW_WARN_MMH,
@@ -41,8 +43,8 @@ const LEAD_HOURS = 12
 
 /**
  * How hard a condition is actually hitting, which a WMO code alone never says.
- * `danger` takes evidence — a violent shower (82), a 暴雨 rain rate, Bft-10 wind,
- * Bft-12 gusts or 40 °C heat — so ordinary thunder, 大雨 and 大雪 stay `warning`,
+ * `danger` takes evidence — a violent shower (82), a 暴雨 rain rate, Bft-12 wind,
+ * Bft-13 gusts or 40 °C heat — so ordinary thunder, 大雨 and 大雪 stay `warning`,
  * and a code whose intensity stays light is `info` (raises no alert at all).
  */
 export type AlertSeverity = 'info' | 'warning' | 'danger'
@@ -123,8 +125,12 @@ export function evaluateAlerts(
   // number a claim rests on, and never one it rejected as missing or NaN.
   const rainRate = Number.isFinite(current.precipitation) ? current.precipitation : undefined
 
+  // Three tiers, mirroring 中国气象局's 黄色 35 / 橙色 37 / 红色 40 °C heat signals;
+  // the scale only has two levels, so the 35 and 37 bands differ by their advice.
   if (current.temperature >= HEAT_DANGER_C) {
     alerts.push({ key: 'heat', level: 'danger', title: '酷热', detail: `当前 ${fmt(current.temperature)}，减少外出，谨防中暑` })
+  } else if (current.temperature >= HEAT_ORANGE_C) {
+    alerts.push({ key: 'heat', level: 'warning', title: '高温', detail: `当前 ${fmt(current.temperature)}，避免午后长时间户外活动` })
   } else if (current.temperature >= HEAT_WARN_C) {
     alerts.push({ key: 'heat', level: 'warning', title: '高温', detail: `当前 ${fmt(current.temperature)}，注意防暑` })
   } else if (current.temperature <= COLD_DANGER_C) {
@@ -162,9 +168,10 @@ export function evaluateAlerts(
     const code = current.weatherCode
     const hail = HAIL_CODES.has(code)
     const gale = gustKmh !== undefined && gustKmh >= GUST_DANGER_KMH
-    // 暴雨 is a rain-RATE claim, named only when a measured rate reached the 暴雨
-    // line; code 82 (violent shower) is dangerous by category, not a 暴雨.
-    const deluge = rainRate !== undefined && rainRate >= RAIN_TORRENTIAL_MMH
+    // 暴雨 is a rain-RATE claim, named only when a measured rate reached the
+    // domestic hourly 暴雨 line (16 mm/h); code 82 alone is dangerous by
+    // category, never a 暴雨.
+    const deluge = rainRate !== undefined && rainRate >= RAIN_DELUGE_MMH
     if (hail || (gale && THUNDER_CODES.has(code))) {
       alerts.push({
         key: 'thunder',
@@ -244,7 +251,9 @@ export function evaluateAlerts(
         key: 'heat-soon',
         level: heatMaxC >= HEAT_DANGER_C ? 'danger' : 'warning',
         title: heatMaxC >= HEAT_DANGER_C ? '酷热' : '高温',
-        detail: `未来 ${LEAD_HOURS} 小时最高可达 ${fmt(heatMaxC)}，注意防暑`,
+        detail: heatMaxC >= HEAT_ORANGE_C
+          ? `未来 ${LEAD_HOURS} 小时最高可达 ${fmt(heatMaxC)}，避免午后长时间户外活动`
+          : `未来 ${LEAD_HOURS} 小时最高可达 ${fmt(heatMaxC)}，注意防暑`,
       })
     }
     if (coldMinC <= COLD_WARN_C && !hasKey('cold')) {

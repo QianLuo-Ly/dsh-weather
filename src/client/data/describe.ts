@@ -15,8 +15,12 @@ import {
   DOWNPOUR_24H_MM,
   FOG_VIS_KM,
   FREEZING_RAIN_CODES,
+  HAZE_MILD_VIS_KM,
+  HAZE_MODERATE_VIS_KM,
   HAZE_RH_MAX,
+  HAZE_SLIGHT_VIS_KM,
   MIST_VIS_KM,
+  RAIN_DELUGE_MMH,
   RAIN_EXTREME_MMH,
   RAIN_HEAVY_MMH,
   RAIN_MODERATE_MMH,
@@ -168,6 +172,11 @@ export function describeSky(e: SkyEvidence): SkyDescription {
         uncertain: false,
       }
     }
+    // 16–20 mm/h is already 暴雨 by hourly intensity but has not reached
+    // QX/T 416-2018's 短时强降水 line; the domestic rate table names it, so we do.
+    if (rate >= RAIN_DELUGE_MMH) {
+      return { glyph: 'rain-heavy', label: '暴雨', basis: `降水率 ${rateText(rate)}`, uncertain: false }
+    }
     const thunderHint = THUNDER_CODES.has(code)
     if (thunderHint) {
       // The code itself is the only thunder evidence, so the wording stays tentative.
@@ -189,7 +198,8 @@ export function describeSky(e: SkyEvidence): SkyDescription {
     return { glyph: 'rain-heavy', label: '大雨', basis, uncertain: false }
   }
 
-  // 4) No precipitation but visibility: 雾/轻雾/霾 by visibility, wet vs dry.
+  // 4) No precipitation but visibility: QX/T 113-2010. Below 10 km the obscuration
+  // is 雾 (< 1 km), else 轻雾 or 霾 by humidity, with 霾 graded by how far it fell.
   const vis = finite(e.visibility)
   if (vis !== undefined && vis < MIST_VIS_KM) {
     const humidity = finite(e.humidity)
@@ -199,16 +209,17 @@ export function describeSky(e: SkyEvidence): SkyDescription {
     if (humidity === undefined) {
       return { glyph: 'fog', label: '能见度偏低', basis: `能见度 ${visText(vis)}`, uncertain: false }
     }
-    const wet = humidity >= HAZE_RH_MAX
-    return {
-      glyph: 'fog',
-      label: wet ? '轻雾' : '霾',
-      basis: `能见度 ${visText(vis)}，湿度 ${pctText(humidity)}`,
-      uncertain: false,
-    }
+    const basis = `能见度 ${visText(vis)}，湿度 ${pctText(humidity)}`
+    // ≥ 80 % is 轻雾; the 80–95 % band is where the standard defers to PM2.5,
+    // a species this layer never sees, so humidity is the whole test here.
+    if (humidity >= HAZE_RH_MAX) return { glyph: 'fog', label: '轻雾', basis, uncertain: false }
+    if (vis < HAZE_MODERATE_VIS_KM) return { glyph: 'fog', label: '重度霾', basis, uncertain: false }
+    if (vis < HAZE_MILD_VIS_KM) return { glyph: 'fog', label: '中度霾', basis, uncertain: false }
+    if (vis < HAZE_SLIGHT_VIS_KM) return { glyph: 'fog', label: '轻度霾', basis, uncertain: false }
+    return { glyph: 'fog', label: '轻微霾', basis, uncertain: false }
   }
 
-  // 5) Cloud-cover grading (octas).
+  // 5) Cloud-cover grading (GB/T 35663-2017 成数).
   const cloud = finite(e.cloudCover)
   if (cloud !== undefined) {
     const basis = `云量 ${pctText(cloud)}`
