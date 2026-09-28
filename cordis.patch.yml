@@ -1,4 +1,9 @@
 # dsh-weather bundle patch: inserts the weather plugin into a profile's layer stack.
+# `name` MUST equal this package's `package.json` name: the loader imports the row by that
+# specifier resolved from the profile tree, and pnpm installs the dependency under the
+# manifest name (or under an explicit alias from an older install). A row naming anything
+# else fails with ERR_MODULE_NOT_FOUND, which the loader only logs — the plugin then never
+# mounts, so neither the chip nor the settings page shows up.
 - insert:
     - id: dsh-weather
-      name: 'dsh-weather'
+      name: '@qianluo-ly/dsh-weather'

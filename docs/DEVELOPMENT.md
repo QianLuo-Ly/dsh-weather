@@ -43,11 +43,26 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
   其余依赖全部内联。构建脚本 `scripts/build.mjs` 用 esbuild 复刻了仓库
   `packages/client/tsdown.client.ts` 的产物格式。
 
+### 入口名不变式（改包名前必读）
+
+`cordis.patch.yml` 里 `insert` 的 `name` 必须**逐字等于** `package.json` 的 `name`：
+
+- `pnpm` 按 manifest 名安装依赖，profile 的 `node_modules/<name>` 因此就是 manifest 名（用户手写
+  别名时才是别名，例如旧的 `"dsh-weather": "github:…"`）；
+- loader 用这个 specifier 从 profile 目录解析入口行，解析失败只在宿主日志里留一条
+  `ERR_MODULE_NOT_FOUND`（`Entry._init()` 捕获后 return），**UI 上没有任何提示**；
+- 行没挂上 → host 半侧不注册 `weather` settings namespace，`client-modules` 也不会为它提供
+  client bundle，于是 chip 与「设置 → 天气」一起消失，插件市场却仍显示安装成功（热挂载只等
+  外层 include 激活，子行导入失败会被吞掉）。
+
+改 `package.json` 的 `name` 时，同一提交里必须改 `cordis.patch.yml` 的 `name`；老 profile 里用旧
+别名装过的实例要卸载重装（改包名就等于换依赖名）。
+
 ## 包结构
 
 ```
 package.json          # dsh.bundle.patch + dsh.client（platform web, inject ui-settings）
-cordis.patch.yml      # 向 profile bundle 层栈插入 dsh-weather 条目
+cordis.patch.yml      # 向 profile bundle 层栈插入 dsh-weather 条目（insert 的 name 必须等于 package.json 的 name）
 src/index.ts          # Host 半侧：settings namespace 注册（schema 边界与 config-shared 共享）
 src/config-shared.ts  # 共享配置类型 + 默认值 + 范围常量 + sanitizeConfig（Host 与浏览器共用，浏览器侧内联）
 src/dsh-settings.d.ts # 本地 ctx.settings 类型 shim（见文件内注释）
