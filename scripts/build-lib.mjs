@@ -8,11 +8,21 @@
  * - Browser half (`client.js`) — the client module system's lazy-CJS factory
  *   artifact (see the banner/footer comments below).
  */
+import { readFileSync } from 'node:fs'
 import { build } from 'esbuild'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const ID = 'dsh-weather'
+/**
+ * Client registration id. The client module system keys bundle factories by
+ * **package name** (`Entry name == package name`, see
+ * `packages/client/modules/src/client/manifest.ts`). When the key differs from
+ * the graph row id, the loader judges the script unregistered, replays it
+ * through the fallback URL, and the second registration throws
+ * `duplicate factory registration` — the plugin then never activates. Read it
+ * from package.json so a rename can never desync this constant again.
+ */
+export const ID = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).name
 
 /**
  * Repository root, resolved from THIS file rather than from `process.cwd()`:

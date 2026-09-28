@@ -14,6 +14,16 @@ if (!loaded) throw new Error('loader was never called')
 const factory = loaded.factory
 if (typeof factory !== 'function') throw new Error('factory missing')
 
+// The loader keys factories by package name (`Entry name == package name`); a
+// mismatch is fatal at runtime even though the factory itself looks fine.
+const pkgName = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).name
+if (loaded.id !== pkgName) {
+  throw new Error(
+    `bundle registered id ${JSON.stringify(loaded.id)} but package name is ${JSON.stringify(pkgName)}`
+    + ' (client-modules requires entry name == package name)',
+  )
+}
+
 const injectedRequire = (spec) => {
   if (spec === 'react') return { jsx: () => null, Fragment: 'fragment' }
   if (spec === 'react/jsx-runtime') return { jsx: () => null, jsxs: () => null, Fragment: 'fragment' }

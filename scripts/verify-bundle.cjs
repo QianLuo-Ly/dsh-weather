@@ -4,6 +4,11 @@
 const fs = require('node:fs')
 const path = require('node:path')
 
+// The registration key must equal the package name: client-modules requires
+// `Entry name == package name`, and a mismatch shows up only at runtime as
+// `duplicate factory registration` + `entry did not activate`.
+const pkgName = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).name
+
 const bundle = fs.readFileSync(path.join(__dirname, '..', 'lib', 'client.js'), 'utf8')
 const failures = []
 const check = (label, ok) => {
@@ -11,7 +16,10 @@ const check = (label, ok) => {
   if (!ok) failures.push(label)
 }
 
-check('lazy-CJS factory head', bundle.startsWith('window.__ModuleLoader__.load({ id: "dsh-weather"'))
+check(
+  `lazy-CJS factory head (id === package name ${JSON.stringify(pkgName)})`,
+  bundle.startsWith(`window.__ModuleLoader__.load({ id: ${JSON.stringify(pkgName)}`),
+)
 check('factory closes the loader call', bundle.trimEnd().endsWith('} });'))
 check('non-trivial bundle size', bundle.length > 20_000)
 check('WeatherBar mounted', bundle.includes('WeatherBar'))
