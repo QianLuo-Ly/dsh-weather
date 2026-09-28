@@ -2,7 +2,7 @@
  * Weather configuration page, registered into `settings.section`: visibility, location mode (auto / manual with city search), saved cities, temperature unit, refresh interval and brief times; composes one module per block. Edits draft locally and commit on blur / Enter / pointer-up, and every write is verified by reading the snapshot back — the transport resolves even when the Host refuses. An edit that leaves a saved city clears `activeSavedId`.
  */
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_WEATHER_CONFIG, sameConfig, sanitizeConfig, type WeatherConfig } from '../../config-shared'
 import { useSavedLocations, writeVerified, type NoticeKind } from '../hooks/weather'
 import { BriefSection } from './brief'
@@ -22,7 +22,7 @@ export interface WriteProbe {
 }
 
 export interface WeatherSettingsSectionProps {
-  scope: SettingsScope<WeatherConfig>
+  scope: ConfigForm<WeatherConfig>
   probe: WriteProbe
 }
 

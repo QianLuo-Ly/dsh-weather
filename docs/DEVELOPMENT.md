@@ -29,19 +29,29 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 
 ## 产物契约
 
-- `lib/index.js`：Host 半侧，Cordis 插件入口（`apply`），注册 `weather` settings
-  namespace（当前 provider 的 `installSection`；老版本 provider 的模块级
-  `installSettingsSection` 作为特性探测兜底），供浏览器半侧持久化配置。
+- `lib/index.js`：Host 半侧，Cordis 插件入口（`apply`）。设置注册是**声明式**的：
+  模块导出 `Config`（= `WeatherConfigSchema`，字段全部 `.volatile()`），Host 0.1.7
+  的设置 provider 把该 entry 的 Config 投影成 settings namespace（ns = profile
+  行 id = `dsh-weather`）并通过 `remote.settings` 供给浏览器半侧。
 - `lib/client.js`：浏览器半侧，按 DSH 客户端模块系统的 lazy-CJS factory 格式构建：
 
   ```js
-  window.__ModuleLoader__.load({ id: "dsh-weather", factory: (require) => { … return module.exports; } })
+  window.__ModuleLoader__.load({ id: "@qianluo-ly/dsh-weather", factory: (require) => { … return module.exports; } })
   ```
 
-  平台模块（react / cordis / ui-slots / ui-primitives）与 `dsh.client.inject`
-  声明的行（`@deepseek-ai/dsh-client-ui-settings`）走注入的 `require`，
+  `id` 必须逐字等于 `package.json` 的 `name`（构建时读取，见 `scripts/build-lib.mjs` 的 `ID`）。
+  平台模块（react / react-dom / cordis / ui-slots，见 `PLATFORM_MODULES`）与 `dsh.client.inject`
+  声明的行（`INJECT_EDGES`，当前 `@deepseek-ai/dsh-client-ui-settings`）走注入的 `require`，
   其余依赖全部内联。构建脚本 `scripts/build.mjs` 用 esbuild 复刻了仓库
   `packages/client/tsdown.client.ts` 的产物格式。
+
+- **`ctx` 上的服务类型全部来自「类型导入」，而这些导入会在宿主重构时静默失效**：
+  `ctx.slots`（`SlotRegistry`）由 `@deepseek-ai/dsh-client-ui-renderer/client` 声明，
+  `ctx.configForms` 由 `@deepseek-ai/dsh-client-ui-settings/client` 声明。两者都必须在
+  源码里有一条 `import type {} from …` 才能进入编译程序；缺失时 `tsc` 报
+  `Property 'slots' does not exist on type 'Context'`。宿主 0.1.7 把旧
+  `@deepseek-ai/dsh-client-runtime`（`settingsScope` 时代）换成了 ui-renderer，
+  **devDependencies 要跟着换**，否则类型面会整块消失。
 
 ### 入口名不变式（改包名前必读）
 
@@ -51,8 +61,8 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
   别名时才是别名，例如旧的 `"dsh-weather": "github:…"`）；
 - loader 用这个 specifier 从 profile 目录解析入口行，解析失败只在宿主日志里留一条
   `ERR_MODULE_NOT_FOUND`（`Entry._init()` 捕获后 return），**UI 上没有任何提示**；
-- 行没挂上 → host 半侧不注册 `weather` settings namespace，`client-modules` 也不会为它提供
-  client bundle，于是 chip 与「设置 → 天气」一起消失，插件市场却仍显示安装成功（热挂载只等
+- 行没挂上 → Host 没有这个 entry，settings namespace 与 client bundle 都不会出现，于是
+  chip 与「设置 → 天气」一起消失，插件市场却仍显示安装成功（热挂载只等
   外层 include 激活，子行导入失败会被吞掉）。
 
 改 `package.json` 的 `name` 时，同一提交里必须改 `cordis.patch.yml` 的 `name`；老 profile 里用旧
@@ -63,9 +73,8 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 ```
 package.json          # dsh.bundle.patch + dsh.client（platform web, inject ui-settings）
 cordis.patch.yml      # 向 profile bundle 层栈插入 dsh-weather 条目（insert 的 name 必须等于 package.json 的 name）
-src/index.ts          # Host 半侧：settings namespace 注册（schema 边界与 config-shared 共享）
+src/index.ts          # Host 半侧：导出 Config（settings 表单来源，字段 .volatile()）
 src/config-shared.ts  # 共享配置类型 + 默认值 + 范围常量 + sanitizeConfig（Host 与浏览器共用，浏览器侧内联）
-src/dsh-settings.d.ts # 本地 ctx.settings 类型 shim（见文件内注释）
 src/client/           # 浏览器半侧
   index.tsx           #   apply：注册 conversation.session.header.actions（天气 chip）+ settings.section（配置页）
   slotmap.d.ts        #   SlotMap 席位声明增强（conversation.session.header.actions）

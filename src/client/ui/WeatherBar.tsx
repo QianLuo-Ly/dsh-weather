@@ -4,7 +4,7 @@
  * and interaction only — data/side effects live in hooks.ts; units.ts converts.
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { DEFAULT_WEATHER_CONFIG, placeKey, sameConfig, sanitizeConfig, type WeatherConfig } from '../../config-shared'
 import { evaluateAlerts } from '../data/alerts'
 import { CURRENT_LOCATION_LABEL } from '../data/geolocation'
@@ -40,7 +40,7 @@ import { NUM, TOKEN, actionButton, baseButton, BANNER, iconButton, segmentButton
 import { tempNumber, tempText, unitLabel, windNumber, windText, windUnitLabel } from '../shared/units'
 
 export interface WeatherBarProps {
-  scope: SettingsScope<WeatherConfig>
+  scope: ConfigForm<WeatherConfig>
 }
 
 type Status = 'locating' | 'loading' | 'ready' | 'error'

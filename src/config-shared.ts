@@ -4,8 +4,14 @@
  * value imports in a plugin bundle.
  */
 
-/** Settings namespace shared by both halves. */
-export const WEATHER_NS = 'weather'
+/**
+ * Settings namespace shared by both halves. Since Host 0.1.7 the settings
+ * namespace of a plugin IS its profile entry id (`cordis.patch.yml` row `id`):
+ * the Host projects the entry's `Config` schema into a form keyed by that id,
+ * and the browser half reads/writes it through `configForms.get(ns)`. Keep this
+ * in sync with the row id — it is asserted by `scripts/verify-bundle.cjs`.
+ */
+export const WEATHER_NS = 'dsh-weather'
 
 /** A user-saved city for quick switching (chip switcher / settings list). */
 export interface SavedLocation {

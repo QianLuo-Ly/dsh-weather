@@ -59,7 +59,7 @@ export async function buildLib(outDir) {
     target: 'node20',
     // Runtime imports resolved from the profile's node_modules. `@deepseek-ai/cordis`
     // appears type-only and is erased; these are the value imports that stay.
-    external: ['@deepseek-ai/dsh-settings', '@deepseek-ai/schemastery'],
+    external: ['@deepseek-ai/schemastery'],
     logLevel: 'silent',
   })
 

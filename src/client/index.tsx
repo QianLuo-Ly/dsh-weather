@@ -1,21 +1,27 @@
 /**
- * dsh-weather — browser half, a lazy-CJS factory (`window.__ModuleLoader__.load`) exporting `apply` / `inject`. It injects the weather chip into `conversation.session.header.actions` (ui-conversation) and the settings page into `settings.section` (ui-settings); both ride `ctx.slots.inject`, and the slot names plus the `slots` / `settingsScope` services are fixed.
+ * dsh-weather — browser half, a lazy-CJS factory (`window.__ModuleLoader__.load`) exporting `apply` / `inject`. It injects the weather chip into `conversation.session.header.actions` (ui-conversation) and the settings page into `settings.section` (ui-settings); both ride `ctx.slots.inject`, and the slot names plus the `slots` / `configForms` services are fixed.
  */
 import type { Context } from '@deepseek-ai/cordis'
 // Type-only SlotMap merge: the register calls below need these keys on the shared `SlotMap`.
 // ui-conversation is present at runtime but not a compile-time dep, so `slotmap.d.ts` declares the seat.
-import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { sanitizeConfig, WEATHER_NS, type WeatherConfig } from '../config-shared'
+// This import also augments `Context` with `configForms` (Host 0.1.7 settings service).
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
+// Type-only Context augmentation: `ctx.slots` (the renderer-owned `SlotRegistry`) is declared by
+// ui-renderer's browser half — the 0.1.7 successor of the service face the pre-0.1.7
+// `dsh-client-runtime` supplied. Erased at build time; the service itself is injected at runtime.
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { WEATHER_NS, type WeatherConfig } from '../config-shared'
 import { WeatherBar } from './ui/WeatherBar'
 import { WeatherSettingsSection, type WriteProbe } from './settings/WeatherSettings'
 import { ensureWeatherStyles } from './ui/styles'
 
 /**
- * Cordis service injection for the client fiber. `remote` is declared, not merely looked up: the fallback
- * write must call `remote.settings` from this plugin's own fiber, so it belongs in the inject list.
- * `settingsScope` cannot exist without `remote`, so declaring it cannot deadlock activation.
+ * Cordis service injection for the client fiber. `configForms` (Host 0.1.7, provided by
+ * `@deepseek-ai/dsh-client-ui-settings/client`) replaces the pre-0.1.7 `settingsScope`
+ * service and carries the settings transport on the PROVIDING fiber's context, so this
+ * plugin no longer declares `remote` — a missing gateway can no longer block activation.
  */
-export const inject = ['slots', 'settingsScope', 'remote']
+export const inject = ['slots', 'configForms']
 
 /** Minimal `ctx.remote.settings` surface used by the refused-write probe. */
 interface RemoteSettingsFace {
@@ -43,12 +49,19 @@ function createWriteProbe(ctx: Context): WriteProbe {
   const message = (error: unknown): string => (error instanceof Error ? error.message : String(error))
   return async (fields, clears) => {
     // Read `remote` through the property with a `get` fallback so a naming mismatch surfaces
-    // as this probe's diagnostic instead of an activation failure.
-    const remote = (ctx as unknown as {
-      remote?: { settings?: RemoteSettingsFace }
-      get?: (name: string) => { settings?: RemoteSettingsFace } | undefined
-    })
-    const settings = remote.remote?.settings ?? remote.get?.('remote')?.settings
+    // as this probe's diagnostic instead of an activation failure. Cordis throws on reading a
+    // service property the app never provided, so the lookup itself is guarded: a missing
+    // gateway must produce a detail line, never a rejected promise (this call site has no catch).
+    let settings: RemoteSettingsFace | undefined
+    try {
+      const host = (ctx as unknown as {
+        remote?: { settings?: RemoteSettingsFace }
+        get?: (name: string) => { settings?: RemoteSettingsFace } | undefined
+      })
+      settings = host.remote?.settings ?? host.get?.('remote')?.settings
+    } catch (error) {
+      return { ok: false, detail: `remote.settings 不可读：${message(error)}` }
+    }
     if (settings === undefined) return { ok: false, detail: 'remote.settings 不可用' }
     const ops = [
       ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
@@ -82,15 +95,14 @@ function createWriteProbe(ctx: Context): WriteProbe {
   }
 }
 
-/** Client plugin entry: bind the settings scope once and mount both surfaces. */
+/** Client plugin entry: bind the settings form once and mount both surfaces. */
 export function apply(ctx: Context): void {
   ensureWeatherStyles()
-  const scope = ctx.settingsScope.bind<WeatherConfig>({
-    namespace: WEATHER_NS,
-    // Stored sections may be hand-edited or written by an older schema, so normalize every
-    // snapshot — a missing field (e.g. `refreshMinutes`) must never surface as NaN upstream.
-    decode: (section) => sanitizeConfig(section as Partial<WeatherConfig> | undefined),
-  })
+  // Host 0.1.7: the settings namespace of a plugin is its profile entry id, so
+  // WEATHER_NS must equal the `cordis.patch.yml` row id. The form validates the
+  // section against the Host-served Config schema; `sanitizeConfig` still runs
+  // at every read site for hand-edited profiles and legacy snapshots.
+  const scope: ConfigForm<WeatherConfig> = ctx.configForms.get<WeatherConfig>(WEATHER_NS)
   const probe = createWriteProbe(ctx)
 
   // Seat orders are relative within each slot: the chip (30) sits among the header actions,

@@ -1,10 +1,10 @@
 /**
  * Weather behaviour hooks — location, feed, saved cities, severe notifications,
  * tab title and day detail. All hooks take the sanitized config section plus a
- * SettingsScope and return plain state; units are applied in units.ts, not here.
+ * ConfigForm and return plain state; units are applied in units.ts, not here.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { SettingsScope } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import {
   deepEqual,
   locationIdentityKey,
@@ -150,7 +150,7 @@ export interface AutoLocationState {
  * drift while the page stays open (same-place early-out incl. GPS-trusted cache).
  */
 export function useAutoLocation(options: {
-  scope: SettingsScope<WeatherConfig>
+  scope: ConfigForm<WeatherConfig>
   effective: WeatherConfig
 }): AutoLocationState {
   const { scope, effective } = options
@@ -495,7 +495,7 @@ export interface SavedLocationsState {
  * is the revision fence (`settings/conflict`), which the re-issue clears.
  */
 export function writeVerified(
-  scope: SettingsScope<WeatherConfig>,
+  scope: ConfigForm<WeatherConfig>,
   fields: Array<[string, unknown]>,
   clears: string[] = [],
 ): Promise<boolean> {
@@ -515,11 +515,11 @@ export function writeVerified(
 }
 
 /**
- * Config write helpers honoring the SettingsScope contract: every helper reads
+ * Config write helpers honoring the ConfigForm contract: every helper reads
  * the snapshot back to report success, because `set()` RESOLVES even when the
  * Host rejected the write (the failure is folded into a recovery read).
  */
-export function useConfigWriter(scope: SettingsScope<WeatherConfig>): {
+export function useConfigWriter(scope: ConfigForm<WeatherConfig>): {
   writable: () => boolean
   write: (field: string, value: unknown) => Promise<boolean>
   clear: (field: string) => Promise<boolean>
@@ -554,7 +554,7 @@ export function useConfigWriter(scope: SettingsScope<WeatherConfig>): {
  * mode switch) — so chip and list can never highlight a different city.
  */
 export function useSavedLocations(options: {
-  scope: SettingsScope<WeatherConfig>
+  scope: ConfigForm<WeatherConfig>
   effective: WeatherConfig
   onNotice?: (text: string, kind: NoticeKind) => void
 }): SavedLocationsState {
