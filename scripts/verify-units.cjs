@@ -65,6 +65,7 @@ global.window = { setTimeout, clearTimeout }
 const X = loadModules([
   'src/client/shared/format.ts',
   'src/config-shared.ts',
+  'src/index.ts',
   'src/client/data/aqi.ts',
   'src/client/data/alerts.ts',
   'src/client/data/geolocation.ts',
@@ -102,6 +103,35 @@ eq('dedupe keeps one entry for the same place', X.sanitizeSavedLocations([
   { id: 'a', name: 'A', latitude: LAT, longitude: LON },
   { id: 'b', name: 'B', latitude: LAT + 0.0001, longitude: LON + 0.0001 },
 ]).length, 1)
+
+// ── Host schema accepts anything an earlier version stored ──────────────────
+// schemastery REJECTS an out-of-range value instead of clamping it, and a
+// registration-time schema failure kills the inject fiber and orphans the stored
+// config, so every `.min()/.max()/.step()` in the Host schema is a way for a
+// legacy or hand-edited document to brick the plugin. The schema checks SHAPE
+// only; bounds belong to sanitizeConfig, which is asserted right below.
+// (Volatile fields resolve to accessor cells, so the accepted value cannot be
+// compared directly here — "does not throw" IS the contract.)
+const legacyDoc = {
+  latitude: 91,
+  longitude: -181,
+  refreshMinutes: 1,
+  briefMorning: '9:30',
+  briefEvening: '不是时间',
+  savedLocations: Array.from({ length: 12 }, (_, index) => ({
+    id: `s${index}`, name: `城市${index}`, latitude: 1 + index / 100, longitude: 2 + index / 100,
+  })),
+}
+ok('host schema accepts a legacy out-of-range document', typeof X.WeatherConfigSchema(legacyDoc) === 'object')
+ok('host schema still rejects a wrong shape', (() => {
+  try { X.WeatherConfigSchema({ latitude: 'not-a-number' }); return false } catch { return true }
+})())
+eq('sanitizeConfig clamps latitude into range', X.sanitizeConfig({ latitude: 91 }).latitude, 90)
+eq('sanitizeConfig clamps longitude into range', X.sanitizeConfig({ longitude: -181 }).longitude, -180)
+eq('sanitizeConfig raises refreshMinutes to the minimum', X.sanitizeConfig({ refreshMinutes: 1 }).refreshMinutes, 5)
+eq('sanitizeConfig caps the saved-city list', X.sanitizeConfig(legacyDoc).savedLocations.length, 8)
+eq('sanitizeConfig falls back on a legacy clock value', X.sanitizeConfig({ briefMorning: '9:30' }).briefMorning, '08:00')
+eq('sanitizeConfig falls back on a non-time clock value', X.sanitizeConfig({ briefEvening: '不是时间' }).briefEvening, '20:00')
 
 // ── format.ts ───────────────────────────────────────────────────────────────
 
@@ -450,6 +480,66 @@ const expectRejection = async (label, run, message) => {
   eq('day detail: the date passes through', detail.date, '2026-09-20')
   eq('day detail: the whole day is returned', detail.hourly.length, 48)
   eq('day detail: an unreported humidity stays absent', detail.hourly[0].humidity, undefined)
+
+  // ── Location drift re-check ────────────────────────────────────────────────
+  // The regression this guards: a `gps`-sourced cache used to be exempt from every
+  // re-check (`if (cached.source === 'gps') return null`), so a device that moved
+  // city between page loads kept showing — and fetching weather for — the old one.
+  // Guangzhou → Shantou is ~340 km, the case that shipped the bug.
+  const GUANGZHOU = { latitude: 23.137, longitude: 113.411, source: 'gps' }
+  const SHANTOU = { latitude: 23.38, longitude: 116.74 }
+  let gpsFix = null
+  let ipSample = { latitude: GUANGZHOU.latitude, longitude: GUANGZHOU.longitude, city: 'Guangzhou' }
+  // Node 21+ ships a read-only `navigator` global: a plain assignment is ignored
+  // in non-strict mode, so the stub must replace the property itself.
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      geolocation: {
+        getCurrentPosition: (onOk, onErr) => {
+          if (gpsFix === null) onErr({ message: 'denied' })
+          else onOk({ coords: gpsFix })
+        },
+      },
+    },
+  })
+  global.fetch = async (url) => {
+    const json = String(url).includes('reverse-geocode-client')
+      ? { principalSubdivision: '广东省', city: '汕头市', locality: '龙湖区' }
+      : ipSample
+    return { ok: true, status: 200, text: async () => JSON.stringify(json) }
+  }
+
+  // A: a stale GPS cache is re-measured with the browser and adopted.
+  gpsFix = { latitude: SHANTOU.latitude, longitude: SHANTOU.longitude, accuracy: 30 }
+  const moved = await X.resolveFreshIfDrifted(GUANGZHOU)
+  ok('drift: a stale GPS cache is re-measured, not frozen', moved !== null)
+  eq('drift: the adopted fix stays a browser fix', moved && moved.source, 'gps')
+  eq('drift: the adopted fix uses the fresh coordinates', moved && [moved.latitude, moved.longitude], [SHANTOU.latitude, SHANTOU.longitude])
+  eq('drift: the adopted fix carries the fresh Chinese address', moved && moved.name, '广东省汕头市龙湖区')
+
+  // B: a move inside the 50 km threshold keeps the cached fix (no name churn).
+  gpsFix = { latitude: 23.16, longitude: 113.43, accuracy: 30 }
+  eq('drift: a small move keeps the cache', await X.resolveFreshIfDrifted(GUANGZHOU), null)
+
+  // C: no browser fix + an agreeing IP consensus keeps the cache.
+  gpsFix = null
+  eq('drift: no browser fix + agreeing IP keeps the cache', await X.resolveFreshIfDrifted(GUANGZHOU), null)
+
+  // D: no browser fix, but the network moved → the IP fallback still adopts.
+  ipSample = { latitude: SHANTOU.latitude, longitude: SHANTOU.longitude, city: 'Shantou' }
+  ok('drift: the IP fallback still catches a move without a browser fix', await X.resolveFreshIfDrifted(GUANGZHOU) !== null)
+
+  // E: an IP-sourced cache keeps its own consensus behaviour.
+  ok('drift: an IP-sourced cache still follows the IP consensus', await X.resolveFreshIfDrifted({ ...GUANGZHOU, source: 'ip' }) !== null)
+
+  // F: an IP-sourced cache is upgraded by a precise fix even without moving — the
+  //    GPS badge and the 区名 must not stay at IP precision for the rest of time.
+  gpsFix = { latitude: GUANGZHOU.latitude, longitude: GUANGZHOU.longitude, accuracy: 30 }
+  const upgraded = await X.resolveFreshIfDrifted({ ...GUANGZHOU, source: 'ip' })
+  ok('drift: an IP cache is upgraded in place by a real fix', upgraded !== null)
+  eq('drift: the upgraded fix is a browser fix', upgraded && upgraded.source, 'gps')
+  eq('drift: the upgraded fix is the measured position', upgraded && [upgraded.latitude, upgraded.longitude], [GUANGZHOU.latitude, GUANGZHOU.longitude])
 
   if (failures.length > 0) {
     console.error(`\nverify-units FAILED (${failures.length}):\n`)

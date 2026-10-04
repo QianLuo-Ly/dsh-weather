@@ -2,7 +2,7 @@
  * 定位方式 block: auto/manual radios, the manual location editor (city search + coordinate and name drafts) and the saved-city list.
  */
 import { useEffect, useId, useRef, useState, type ReactElement } from 'react'
-import { LAT_RANGE, LON_RANGE, MAX_NAME_LENGTH, type WeatherConfig } from '../../config-shared'
+import { LAT_RANGE, LON_RANGE, MAX_NAME_LENGTH, sanitizeText, type WeatherConfig } from '../../config-shared'
 import type { SavedLocationsState } from '../hooks/weather'
 import { CitySearchField } from './city-search'
 import { SavedCitiesList } from './saved-cities'
@@ -82,12 +82,21 @@ export function LocationSection(props: {
 
   /**
    * Commit the display-name draft; renaming means custom coordinates, so the
-   * saved-city highlight is cleared too.
+   * saved-city highlight is cleared too. `sanitizeText` is the trust boundary every
+   * text field must pass (control/zero-width characters stripped, capped by code
+   * point): plain trim+slice let a pasted U+200B into the document, and because
+   * `sanitizeConfig` strips it on read, the draft could never equal the sanitized
+   * `effective.cityName` — every blur re-sent the same dirty write and the invisible
+   * character stayed in the box for good.
    */
   const commitName = (input: HTMLInputElement): void => {
-    const next = input.value.trim().slice(0, MAX_NAME_LENGTH)
-    if (next === effective.cityName) return
+    const next = sanitizeText(input.value) ?? ''
+    if (next === (effective.cityName ?? '')) {
+      setNameInput(next)
+      return
+    }
     if (next === '') {
+      setNameInput('')
       commit([], ['cityName', 'activeSavedId'])
       return
     }

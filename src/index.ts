@@ -11,19 +11,16 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import {
   BRIEF_TIMES,
-  CLOCK_TIME_PATTERN,
   DEFAULT_WEATHER_CONFIG,
-  LAT_RANGE,
-  LON_RANGE,
-  MAX_SAVED_LOCATIONS,
-  REFRESH_RANGE,
 } from './config-shared'
 
 /**
- * Settings schema for the `dsh-weather` namespace. Bounds come from config-shared constants so Host validation,
- * the client fallback, the sanitizer and the settings UI cannot drift. It must also accept anything an earlier
- * version stored — a registration-time schema failure kills the inject fiber and orphans the stored config —
- * so coordinates stay unbounded, text carries no `.max()`, `refreshMinutes` only `.step(1)`, and `sanitizeConfig` bounds it.
+ * Settings schema for the `dsh-weather` namespace. It must accept anything an earlier version stored:
+ * a registration-time schema failure kills the inject fiber and orphans the stored config, and the Host
+ * refuses all further writes for that namespace. schemastery REJECTS out-of-range values rather than
+ * clamping them, so every bound here is a way for a legacy or hand-edited document to brick the plugin.
+ * Bounds and defaults therefore live in `config-shared.ts` only (LAT_RANGE / LON_RANGE / REFRESH_RANGE;
+ * `sanitizeConfig` clamps, rounds and falls back on what it reads); this schema checks the SHAPE only.
  *
  * Every field is `.volatile()`: the Host settings provider only projects (and only accepts writes for) volatile
  * fields, and a volatile-only config change is hot-committed into the running fiber instead of forcing a restart.
@@ -31,32 +28,31 @@ import {
 export const WeatherConfigSchema = z.object({
   enabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.enabled).volatile(),
   locationMode: z.union([z.const('auto'), z.const('manual')]).default(DEFAULT_WEATHER_CONFIG.locationMode).volatile(),
-  latitude: z.number().min(LAT_RANGE.min).max(LAT_RANGE.max).required(false).volatile(),
-  longitude: z.number().min(LON_RANGE.min).max(LON_RANGE.max).required(false).volatile(),
+  latitude: z.number().required(false).volatile(),
+  longitude: z.number().required(false).volatile(),
   // No length bound: a legacy unbounded name must not abort registration.
   cityName: z.string().required(false).volatile(),
+  // No count bound: `sanitizeSavedLocations` caps at MAX_SAVED_LOCATIONS on read.
   savedLocations: z.array(z.object({
     id: z.string(),
     name: z.string(),
     latitude: z.number(),
     longitude: z.number(),
-  })).max(MAX_SAVED_LOCATIONS).default([]).volatile(),
+  })).default([]).volatile(),
   activeSavedId: z.string().required(false).volatile(),
   units: z.union([z.const('celsius'), z.const('fahrenheit')]).default(DEFAULT_WEATHER_CONFIG.units).volatile(),
-  refreshMinutes: z.number()
-    .step(1)
-    .min(REFRESH_RANGE.min)
-    .max(REFRESH_RANGE.max)
-    .default(DEFAULT_WEATHER_CONFIG.refreshMinutes)
-    .volatile(),
+  // No `.step()`/`.min()`/`.max()`: a stored 7.5 or 0 must not be rejected at registration.
+  refreshMinutes: z.number().default(DEFAULT_WEATHER_CONFIG.refreshMinutes).volatile(),
   alertsEnabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.alertsEnabled).volatile(),
   briefEnabled: z.boolean().default(DEFAULT_WEATHER_CONFIG.briefEnabled).volatile(),
-  briefMorning: z.string().pattern(CLOCK_TIME_PATTERN).default(BRIEF_TIMES.morning).volatile(),
-  briefEvening: z.string().pattern(CLOCK_TIME_PATTERN).default(BRIEF_TIMES.evening).volatile(),
+  // No `.pattern()`: a stored `9:30` (no leading zero) must not abort registration;
+  // `parseClockTime` in sanitizeConfig falls back to the default instead.
+  briefMorning: z.string().default(BRIEF_TIMES.morning).volatile(),
+  briefEvening: z.string().default(BRIEF_TIMES.evening).volatile(),
   // Internal auto-location cache (written by the browser half, kept out of the
   // settings UI so the resolved location stays stable across refreshes).
-  autoLatitude: z.number().min(LAT_RANGE.min).max(LAT_RANGE.max).required(false).volatile(),
-  autoLongitude: z.number().min(LON_RANGE.min).max(LON_RANGE.max).required(false).volatile(),
+  autoLatitude: z.number().required(false).volatile(),
+  autoLongitude: z.number().required(false).volatile(),
   autoCityName: z.string().required(false).volatile(),
   autoSource: z.union([z.const('gps'), z.const('ip')]).required(false).volatile(),
 })

@@ -3,7 +3,7 @@
  * reverse geocoding, city search and the IP-drift check. All endpoints answer CORS.
  */
 // Coordinate quantum shared with placeKey: both must land on the same grid.
-import { PLACE_DECIMALS } from '../../config-shared'
+import { LAT_RANGE, LON_RANGE, PLACE_DECIMALS } from '../../config-shared'
 import { apiFetch, withTimeout } from '../shared/http'
 
 /**
@@ -33,9 +33,9 @@ const DISTRICT_ACCURACY_M = 1_000
 /** Accuracy above which the browser fix is abandoned in favour of city-level IP. */
 const CITY_ACCURACY_M = 10_000
 /**
- * IP-drift threshold (km), also the consensus radius in {@link resolveLocationByIp}:
- * a fresh consensus farther than this from the cached IP location means the
- * network moved (VPN / roaming / re-route) and the plugin adopts it.
+ * Drift threshold (km), also the consensus radius in {@link resolveLocationByIp}:
+ * a fresh location farther than this from the cached auto fix means the device or
+ * network moved (VPN / roaming / re-route / another city) and the plugin adopts it.
  */
 const AUTO_LOCATION_DRIFT_KM = 50
 /**
@@ -48,6 +48,12 @@ const MAX_NAME_MATCH_KM = 150
 const IP_PROVIDER_TIMEOUT_MS = 6_000
 /** Browser-fix budget when resolving or diagnosing a location. */
 const GPS_TIMEOUT_MS = 6_000
+/**
+ * Reverse-geocode budget. It runs on the naming path of every resolve — ahead of the
+ * {@link localizeCityName} fallback — so the default 10 s would add that much to a
+ * "定位中…" whenever BigDataCloud is slow, ignoring the 6 s GPS budget around it.
+ */
+const GEOCODE_TIMEOUT_MS = 5_000
 
 /** Map a browser-reported accuracy (m) to a precision tier. */
 function precisionFromAccuracy(accuracy?: number): LocationPrecision {
@@ -111,8 +117,13 @@ async function sampleIpLocation(url: string): Promise<GeoLocation | null> {
     }
     const latitude = toNumber(json.latitude ?? json.lat)
     const longitude = toNumber(json.longitude ?? json.lon)
-    // Empty-string coordinates must not silently become the (0,0) sample.
+    // Empty-string coordinates must not silently become the (0,0) sample, and a
+    // provider answering out of range (a bogus 999) must not poison the cache or
+    // reach Open-Meteo's URL — `sanitizeConfig` would clamp what is SHOWN, leaving
+    // the stored and displayed coordinates disagreeing.
     if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null
+    if (latitude < LAT_RANGE.min || latitude > LAT_RANGE.max) return null
+    if (longitude < LON_RANGE.min || longitude > LON_RANGE.max) return null
     // freeipapi returns `cityName`/`regionName` while ipapi.is and ipwho.is use
     // `city`/`region`, so read both or that sample contributes no name.
     const city = (json.city ?? json.cityName ?? '').trim()
@@ -198,7 +209,7 @@ interface ChineseAddress {
 async function reverseGeocodeAddress(latitude: number, longitude: number): Promise<ChineseAddress> {
   const { latitude: lat, longitude: lon } = roundCoordinates(latitude, longitude)
   const url = `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=zh-Hans`
-  const res = await apiFetch(url)
+  const res = await apiFetch(url, { timeoutMs: GEOCODE_TIMEOUT_MS })
   if (!res.ok) throw new Error(`反向地理编码响应异常（HTTP ${res.status}）`)
   const json = res.json as {
     principalSubdivision?: string
@@ -346,14 +357,31 @@ export async function resolveAutoLocation(): Promise<GeoLocation> {
 }
 
 /**
- * Detect drift of a cached IP-derived location: when a fresh IP consensus differs
- * from the cache by more than {@link AUTO_LOCATION_DRIFT_KM}, resolve a fresh
- * location to adopt. GPS caches are never re-checked; null on no drift/failure.
+ * Re-check a cached auto location and return a location to adopt; null when nothing
+ * has to change or every probe failed. The cache is a display hint, never the current
+ * position: a `gps` fix is re-measured exactly like an `ip` one, because the device
+ * can change city between two page loads while the stored fix stays put, and an `ip`
+ * cache must not stay at city precision once a real fix is available.
  */
 export async function resolveFreshIfDrifted(
   cached: Pick<GeoLocation, 'latitude' | 'longitude' | 'source'>,
 ): Promise<GeoLocation | null> {
-  if (cached.source === 'gps') return null
+  // The browser fix is the strongest evidence available and the only source that can
+  // name a 区, so it is tried first for EVERY cached source — an IP consensus is never
+  // allowed to override a live measurement. A cached browser fix confirmed in place is
+  // left alone (no name churn on every probe); an IP-derived cache is upgraded in
+  // place, or the GPS badge and the 区名 would never leave city precision.
+  const fix = await withTimeout(resolveLocationByBrowser(), GPS_TIMEOUT_MS)
+  const precision = fix !== null ? precisionFromAccuracy(fix.accuracy) : 'unreliable'
+  if (fix !== null && precision !== 'unreliable') {
+    const moved = haversineKm(cached.latitude, cached.longitude, fix.latitude, fix.longitude) > AUTO_LOCATION_DRIFT_KM
+    if (moved || cached.source !== 'gps') {
+      return { ...fix, name: await resolveDisplayName(fix, precision) }
+    }
+    return null
+  }
+  // No usable browser fix: compare against a fresh IP consensus and only re-resolve in
+  // full on a disagreement — GPS stays preferred, IP is the fallback.
   let ip: GeoLocation | null = null
   try {
     ip = await resolveLocationByIp()

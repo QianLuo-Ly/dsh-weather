@@ -1,7 +1,7 @@
 /**
  * Daily weather brief: a morning brief (today's outlook) and an evening brief
  * (tomorrow's) at the configured times, at most once per slot per day. All the
- * dedupe/scheduling state lives here, so `hooks.ts` never sees the storage keys.
+ * dedupe/scheduling state lives here, so `hooks/weather.ts` never sees the storage keys.
  */
 import { useEffect, useRef } from 'react'
 import { parseClockTime, type WeatherConfig } from '../../config-shared'

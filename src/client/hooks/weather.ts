@@ -36,12 +36,12 @@ import { payloadMatchesLocation } from '../data/location-match'
 import { tempText, windText } from '../shared/units'
 
 /**
- * Minimum gap (ms) between IP-drift probes — a persist re-runs the location
- * effect, and that cascade must not fire another network probe.
+ * Minimum gap (ms) between location re-checks — a persist re-runs the location
+ * effect, and that cascade must not fire another network probe. The steady-state
+ * cadence is the weather refresh interval (`refreshMinutes`), so both follow the
+ * same setting.
  */
 const DRIFT_PROBE_MIN_GAP_MS = 60_000
-/** How often the open page re-checks IP drift (network moves mid-session). */
-const DRIFT_PROBE_INTERVAL_MS = 60 * 60_000
 /** Upper bound on the in-memory notification dedupe map. */
 const NOTIFY_DEDUPE_MAX = 24
 
@@ -146,8 +146,9 @@ export interface AutoLocationState {
 }
 
 /**
- * Resolve the active location from config, cache the auto result, and follow IP
- * drift while the page stays open (same-place early-out incl. GPS-trusted cache).
+ * Resolve the active location from config, cache the auto result as a display hint,
+ * and keep following the real position while the page stays open (same-place
+ * early-out for config-only re-renders, otherwise a drift re-check of any source).
  */
 export function useAutoLocation(options: {
   scope: ConfigForm<WeatherConfig>
@@ -167,17 +168,26 @@ export function useAutoLocation(options: {
   const alertsEnabledRef = useRef(effective.alertsEnabled)
   alertsEnabledRef.current = effective.alertsEnabled
 
-  // Persist a resolved auto location so it stays stable across refreshes and the
-  // location effect converges on the new coordinates (internal cache writes).
-  const writer = useConfigWriter(scope)
+  // Persist a resolved auto location as the display hint for the next page load
+  // (it keeps the chip stable instead of blank/flapping); every load and every
+  // periodic re-check still re-verifies it, so it can never outlive a move.
   const persistLocation = useCallback((loc: GeoLocation): void => {
-    writer.write('autoLatitude', loc.latitude)
-    writer.write('autoLongitude', loc.longitude)
-    // Remote-composed (geocoder + province joining) and may exceed the name
-    // budget; sanitize here or stored and displayed values disagree.
-    writer.write('autoCityName', sanitizeText(loc.name) ?? CURRENT_LOCATION_LABEL)
-    writer.write('autoSource', loc.source)
-  }, [writer])
+    // One mutation for the whole cache: four independent writes each carried their own
+    // revision fence, so a refused coordinate write could land the name alone — a new
+    // city name displayed over the old city's weather, with no notice.
+    // Remote-composed (geocoder + province joining) and may exceed the name budget;
+    // sanitize here or stored and displayed values disagree. The "当前位置" sentinel is
+    // a UI placeholder, not a place name: clearing the field keeps the chip on the same
+    // text while leaving every later resolve able to fill in a real name.
+    const name = sanitizeText(loc.name)
+    const named = name !== undefined && name !== CURRENT_LOCATION_LABEL
+    void writeVerified(scope, [
+      ['autoLatitude', loc.latitude],
+      ['autoLongitude', loc.longitude],
+      ...(named ? [['autoCityName', name] as [string, unknown]] : []),
+      ['autoSource', loc.source],
+    ], named ? [] : ['autoCityName'])
+  }, [scope])
 
   const showDrift = useCallback((newName: string, notify: boolean): void => {
     setDriftNotice(`已切换到 ${newName}`)
@@ -201,16 +211,17 @@ export function useAutoLocation(options: {
   }, [])
 
   /**
-   * IP-drift check on a cached auto fix: a fresh IP consensus more than
-   * AUTO_LOCATION_DRIFT_KM away means the network moved, so the caller adopts it.
-   * GPS caches are never re-checked. The shared gate is armed before the probe and
-   * rolled back when the probe was superseded, so a double-run cannot hide drift.
+   * Drift check on a cached auto fix: a fresh resolution more than
+   * AUTO_LOCATION_DRIFT_KM away means the device or network moved, so the caller
+   * adopts it. Every cached fix is re-checked, GPS included — persistence is a
+   * display hint, never the current position. The shared gate is armed before the
+   * probe and rolled back when the probe was superseded, so a double-run cannot
+   * hide drift.
    */
   const probeDrift = useCallback(async (
     cached: GeoLocation,
     isCancelled: () => boolean,
   ): Promise<GeoLocation | null> => {
-    if (cached.source === 'gps') return null
     if (Date.now() - lastDriftProbeRef.current < DRIFT_PROBE_MIN_GAP_MS) return null
     const previousGate = lastDriftProbeRef.current
     lastDriftProbeRef.current = Date.now()
@@ -301,17 +312,18 @@ export function useAutoLocation(options: {
     probeDrift,
   ])
 
-  // Periodic IP-drift probe (auto mode, IP-derived cache only): a network move
-  // while the page stays open is adopted so the forecast follows automatically.
+  // Periodic location re-check (auto mode, any cached source), on the same cadence
+  // as the weather feed: a move that happens while the page stays open (device
+  // carried to another city, network re-route) is adopted so the chip and forecast
+  // follow without a reload.
   useEffect(() => {
     if (!effective.enabled || effective.locationMode !== 'auto') return
     if (effective.autoLatitude === undefined || effective.autoLongitude === undefined) return
-    if ((effective.autoSource ?? 'ip') === 'gps') return
     let cancelled = false
     const cached = {
       latitude: effective.autoLatitude,
       longitude: effective.autoLongitude,
-      source: 'ip' as const,
+      source: effective.autoSource ?? 'ip',
     }
     const probe = (): void => {
       // A hidden tab must not re-resolve (three IP providers + GPS + geocode);
@@ -324,10 +336,15 @@ export function useAutoLocation(options: {
       void resolveFreshIfDrifted(cached).then((fresh) => {
         if (cancelled || fresh === null) return
         persistLocation(fresh)
+        // Push it into the UI directly. The persist-only path re-runs the location
+        // effect only when the COORDINATES changed, so an adoption landing on the same
+        // ~100 m grid (an ip → gps upgrade, or a fresh 区名) would leave `location`
+        // — and with it the GPS/IP badge — showing the previous answer.
+        setLocation(fresh)
         showDrift(fresh.name, alertsEnabledRef.current)
       })
     }
-    const id = window.setInterval(probe, DRIFT_PROBE_INTERVAL_MS)
+    const id = window.setInterval(probe, Math.max(REFRESH_RANGE.min, effective.refreshMinutes) * 60_000)
     const onVisibility = (): void => {
       if (!document.hidden) probe()
     }
@@ -343,6 +360,7 @@ export function useAutoLocation(options: {
     effective.autoLatitude,
     effective.autoLongitude,
     effective.autoSource,
+    effective.refreshMinutes,
     persistLocation,
     showDrift,
   ])
@@ -489,20 +507,23 @@ export interface SavedLocationsState {
 }
 
 /**
- * Write a batch and confirm the authority holds it, re-issuing once if not.
- * `set()`/`unset()` RESOLVE even on a Host rejection (failure is folded into a
- * recovery read), so success is read back from the snapshot. The routine refusal
- * is the revision fence (`settings/conflict`), which the re-issue clears.
+ * Write a batch as ONE namespace mutation and confirm the authority holds it, re-issuing once
+ * if not. `set()`/`unset()` RESOLVE even on a Host rejection (failure is folded into a recovery
+ * read), so success is read back from the snapshot; the routine refusal is the revision fence
+ * (`settings/conflict`), which the re-issue clears. `mutate(ops)` is what makes a batch a batch:
+ * N separate `set()` calls each carried its own fence, each validated and persisted on its own
+ * (so a 5-field city switch could half-apply), and each read back a mirror the other writes had
+ * not folded yet, which re-sent every field but the last.
  */
 export function writeVerified(
   scope: ConfigForm<WeatherConfig>,
   fields: Array<[string, unknown]>,
   clears: string[] = [],
 ): Promise<boolean> {
-  const apply = (): Promise<unknown[]> => Promise.all([
-    ...fields.map(([field, value]) => scope.set(field, value)),
-    ...clears.map((field) => scope.unset(field)),
-  ])
+  const ops = [
+    ...fields.map(([field, value]) => ({ op: 'set' as const, path: [field], value })),
+    ...clears.map((field) => ({ op: 'unset' as const, path: [field] })),
+  ]
   const landed = (): boolean => {
     const current = scope.getSnapshot().value as Record<string, unknown> | undefined
     return current !== undefined
@@ -510,7 +531,8 @@ export function writeVerified(
       && clears.every((field) => current[field] === undefined)
   }
   // Never rejects: a throw is "did not land", which the retry re-attempts.
-  const attempt = (): Promise<boolean> => apply().then(landed, () => false)
+  const attempt = (): Promise<boolean> =>
+    (ops.length === 0 ? Promise.resolve(true) : scope.mutate(ops)).then(landed, () => false)
   return attempt().then((ok) => (ok ? true : attempt()))
 }
 
@@ -523,14 +545,8 @@ export function useConfigWriter(scope: ConfigForm<WeatherConfig>): {
   writable: () => boolean
   write: (field: string, value: unknown) => Promise<boolean>
   clear: (field: string) => Promise<boolean>
-  /** Verify several fields at once (for writes issued as one synchronous batch). */
-  verify: (checks: Array<[string, unknown]>) => boolean
 } {
   return useMemo(() => {
-    const fieldValue = (field: string): unknown => {
-      const value = scope.getSnapshot().value as Record<string, unknown> | undefined
-      return value === undefined ? undefined : value[field]
-    }
     return {
       writable: () => scope.getSnapshot().writable,
       write: (field: string, value: unknown): Promise<boolean> => {
@@ -541,8 +557,6 @@ export function useConfigWriter(scope: ConfigForm<WeatherConfig>): {
         if (!scope.getSnapshot().writable) return Promise.resolve(false)
         return writeVerified(scope, [], [field])
       },
-      verify: (checks: Array<[string, unknown]>): boolean =>
-        checks.every(([field, expected]) => deepEqual(fieldValue(field), expected)),
     }
   }, [scope])
 }
@@ -609,22 +623,17 @@ export function useSavedLocations(options: {
   }, [writer, showNotice])
 
   /**
-   * Issue several field writes in one batch (the transport publishes only the
-   * final state) and verify the resulting snapshot.
+   * Issue several field writes as ONE namespace mutation and verify the resulting
+   * snapshot — `writeVerified` re-issues once when the revision fence refused it, and
+   * either every field lands or none does (see its comment for why that matters).
    */
   const commitBatch = useCallback(async (
     fields: Array<[string, unknown]>,
     clears: string[] = [],
   ): Promise<boolean> => {
     if (!ensureWritable()) return false
-    const pending: Array<Promise<boolean>> = []
-    for (const [field, value] of fields) pending.push(writer.write(field, value))
-    for (const field of clears) pending.push(writer.clear(field))
-    await Promise.all(pending)
-    const checks: Array<[string, unknown]> = fields.map(([field, value]) => [field, value])
-    for (const field of clears) checks.push([field, undefined])
-    return writer.verify(checks)
-  }, [ensureWritable, writer])
+    return writeVerified(scope, fields, clears)
+  }, [ensureWritable, scope])
 
   const switchTo = useCallback((id: string): void => {
     const target = baseList().find((entry) => entry.id === id)
@@ -645,10 +654,17 @@ export function useSavedLocations(options: {
    * saved city, so any previously active saved id is cleared.
    */
   const selectPlace = useCallback((place: { name: string; latitude: number; longitude: number }): void => {
+    // The search result's name is remote text and the Host does not constrain
+    // `cityName`, so it passes the same trust boundary as every other text field.
+    const name = sanitizeText(place.name)
+    if (name === undefined) {
+      showNotice('地名解析失败，请重试', 'err')
+      return
+    }
     const fields: Array<[string, unknown]> = [
       ['latitude', place.latitude],
       ['longitude', place.longitude],
-      ['cityName', place.name],
+      ['cityName', name],
     ]
     if (effective.locationMode !== 'manual') fields.push(['locationMode', 'manual'])
     void commitBatch(fields, ['activeSavedId']).then((ok) => {
@@ -830,9 +846,11 @@ export function useTabTitle(options: {
   data: WeatherData | null
   /** Chip status as the bar computes it (`locating` included). */
   status: 'loading' | 'ready' | 'error' | 'locating'
+  /** The location `data` was fetched for, so the name is never paired with another place's payload. */
+  location: GeoLocation | null
   placeName: string
 }): void {
-  const { effective, data, status, placeName } = options
+  const { effective, data, status, location, placeName } = options
   const baseTitleRef = useRef<string | null>(null)
   const lastWrittenRef = useRef<string | null>(null)
 
@@ -861,6 +879,10 @@ export function useTabTitle(options: {
       }
       return
     }
+    // The name shown in the title comes from config, which a city switch updates a
+    // commit BEFORE the matching payload arrives: without this gate the tab announced
+    // `<new city> <old city's temperature>` for as long as the fetch took.
+    if (!payloadMatchesLocation(data, location)) return
     const current = document.title
     if (baseTitleRef.current === null || (current !== ours && !TITLE_PREFIX_RE.test(current))) {
       // Host value (or first sample): strip any leftover prefix, then adopt.
@@ -875,7 +897,7 @@ export function useTabTitle(options: {
     const title = `${glyphEmoji(sky.glyph)} ${sky.label} ${tempText(data.current.temperature, effective.units)} ${placeName} — ${baseTitleRef.current ?? current}`
     if (document.title !== title) document.title = title
     lastWrittenRef.current = title
-  }, [data, effective.enabled, effective.units, placeName, status])
+  }, [data, effective.enabled, effective.units, location, placeName, status])
 }
 
 // ── Day detail ──────────────────────────────────────────────────────────────
@@ -884,7 +906,6 @@ export interface DayDetailState {
   /** Date currently opened (`YYYY-MM-DD`), or null when the popover is on the normal view. */
   date: string | null
   detail: DayDetail | null
-  busy: boolean
   error: string | null
   open: (date: string) => void
   close: () => void
@@ -908,7 +929,6 @@ function locationKey(location: GeoLocation | null): string | null {
 export function useDayDetail(location: GeoLocation | null): DayDetailState {
   const [request, setRequest] = useState<{ date: string; key: string; nonce: number } | null>(null)
   const [detail, setDetail] = useState<DayDetail | null>(null)
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // `${cityKey}|${date}` → payload, so flipping between dates does not re-request.
   const cacheRef = useRef(new Map<string, DayDetail>())
@@ -924,12 +944,10 @@ export function useDayDetail(location: GeoLocation | null): DayDetailState {
     if (cached !== undefined) {
       setDetail(cached)
       setError(null)
-      setBusy(false)
       return
     }
     const controller = new AbortController()
     let cancelled = false
-    setBusy(true)
     setError(null)
     setDetail(null)
     void fetchDayDetail(location, request.date, controller.signal)
@@ -943,7 +961,6 @@ export function useDayDetail(location: GeoLocation | null): DayDetailState {
         if (cancelled || controller.signal.aborted) return
         setError(err instanceof Error ? err.message : String(err))
       })
-      .finally(() => { if (!cancelled) setBusy(false) })
     return () => {
       cancelled = true
       controller.abort()
@@ -973,7 +990,6 @@ export function useDayDetail(location: GeoLocation | null): DayDetailState {
   return {
     date: active && request !== null ? request.date : null,
     detail: active ? detail : null,
-    busy: active && busy,
     error: active ? error : null,
     open,
     close,

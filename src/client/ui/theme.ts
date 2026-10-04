@@ -15,8 +15,6 @@ export const TOKEN = {
   bgSoft: 'var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.06))',
   /** Elevated surfaces above the base layer (inputs, dropdowns). */
   bgRaised: 'var(--dsw-alias-bg-layer-1, #ffffff)',
-  /** Row hover/active fill for the suggestion list (visible in light mode). */
-  bgHover: 'var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.1))',
   // Text colors flip to pure white in dark mode via .dshw-root (see styles.ts).
   fg: 'var(--dshw-fg, #1f2328)',
   fgMuted: 'var(--dshw-fg-muted, #5f6672)',

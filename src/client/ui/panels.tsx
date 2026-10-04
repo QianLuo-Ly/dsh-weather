@@ -47,7 +47,6 @@ export function StatChip(props: {
   value: string
   suffix?: string
   valueColor?: string
-  compact?: boolean
 }): ReactElement {
   return (
     <div
@@ -58,7 +57,7 @@ export function StatChip(props: {
         gap: 1,
         background: TOKEN.bgSoft,
         borderRadius: 10,
-        padding: props.compact === true ? '6px 2px' : '7px 4px',
+        padding: '7px 4px',
         border: `1px solid ${TOKEN.border}`,
         overflow: 'hidden',
       }}

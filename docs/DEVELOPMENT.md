@@ -96,12 +96,12 @@ src/client/           # 浏览器半侧
     units.tsx         #     单位与刷新间隔
     diagnostics.tsx   #     定位诊断面板
   hooks/              #   行为层：副作用与状态
-    weather.ts        #     定位 + IP 漂移、数据抓取 + 降级、收藏城市、通知、标签页标题、逐日详情
+    weather.ts        #     定位 + 位置漂移复检、数据抓取 + 降级、收藏城市、通知、标签页标题、逐日详情
     brief.ts          #     每日简报调度（到点推送、补发窗口、每时段一次）
   data/               #   数据层：抓取、解析、文案
     weather-api.ts    #     公制抓取、超时/取消、IP 共识定位、中文地理编码、逐日详情
     geolocation.ts    #     定位（GPS 优先、IP 兜底）、城市搜索、定位诊断
-    location-match.ts #     载荷与当前定位是否同一地点（漂移判定用）
+    location-match.ts #     载荷与当前定位是否同一地点（通知 / 简报防串城市用）
     condition.ts      #     WMO 分类/阈值单一源 + 中文文案 + 时间格式化
     aqi.ts            #     中国 AQI（HJ 633-2012 的 IAQI 分段表与自算，非数据源口径）
     describe.ts       #     天气描述文案与分级（天空/雨雪强度）

@@ -1,7 +1,7 @@
 /**
  * Session-header weather chip in the app-reserved
  * `conversation.session.header.actions` seat (not a floating overlay). Layout
- * and interaction only — data/side effects live in hooks.ts; units.ts converts.
+ * and interaction only — data/side effects live in hooks/weather.ts; units.ts converts.
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type ReactElement } from 'react'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -123,7 +123,7 @@ export function WeatherBar(props: WeatherBarProps): ReactElement | null {
 
   useWeatherNotifications({ effective, data, location, placeName: name, stale: feed.stale })
   useDailyBrief({ effective, data, location, placeName: name, stale: feed.stale })
-  useTabTitle({ effective, data, status, placeName: name })
+  useTabTitle({ effective, data, status, location, placeName: name })
 
   // IP-drift switches and saved-city feedback share one toast slot.
   const toast = driftNotice ?? saved.notice
