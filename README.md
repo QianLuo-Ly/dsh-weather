@@ -32,7 +32,8 @@ dsh plugin --profile web add https://github.com/QianLuo-Ly/dsh-weather
 
 重启（或按提示刷新）`dsh web` 后生效。
 
-> 要求 dsh web 0.1.0-rc.6 或更新版本。
+> 要求 DSH Web **0.1.7 或更新版本**（设置模型自 0.1.7 起换成 `Config` + `configForms`，更老的宿主装上也只会失效）；
+> 桌面端 **0.2.1-rc.2** 已实测兼容（安装、组合、客户端注册均通过）。
 
 ## 使用
 

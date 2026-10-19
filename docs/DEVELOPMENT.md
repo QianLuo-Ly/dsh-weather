@@ -27,6 +27,45 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 > 提示：本机 pnpm 版本若与 profile 的 node_modules 布局不一致，会在
 > `~/.dsh/profiles/web/.npmrc` 里加一行 `virtual-store-dir-max-length=120`。
 
+## 宿主版本兼容（2026-10-19 核对：桌面端 0.2.1-rc.2）
+
+`package.json` 的 `engines.dsh` 声明真实下限 `>=0.1.7-rc.2 <0.3.0-0`（0.1.7 才有 `configForms`）。
+0.2.x 起宿主会在安装前后用 `engines.dsh`（或 `@deepseek-ai/dsh*` peer）做兼容检查
+（`app-boot` 的 `evaluatePluginCompatibility`）：低于 0.1.7 或 0.3+ 会被明确拒绝，
+而不是「装上了但 chip 不出现」。范围用 0.2.1 的评估器实测：`0.1.7-rc.2`～`0.2.99-rc.1` 放行、
+`0.1.6-alpha.1` / `0.3.0-0` 拒绝。
+
+0.2.1 逐项核对结论——**现有 `src/` 无需改动**：
+
+| 契约 | 0.1.7 | 0.2.1-rc.2 | 依据 |
+| --- | --- | --- | --- |
+| `dsh.bundle.patch`、`exports["./client"]` | 支持 | 支持 | `app-boot` 的 `bundlePatchPaths`、`client-modules` 的 `clientExportOf` |
+| `dsh.client.platform` / `inject` | 支持 | 支持（新增可选 `external`） | 0.2.1 启动图里本插件行仍带 `inject: ["@deepseek-ai/dsh-client-ui-settings"]` |
+| 客户端注册 `window.__ModuleLoader__.load({id, factory})` | 一致 | 一致 | 宿主自带包 `lib/client.js` 首行同格式；`id` 仍必须逐字等于包名 |
+| `ctx.slots`（`inject`/`register`）、slot 名 `conversation.session.header.actions`、`settings.section` | 一致 | 一致 | 0.2.1 `ui-renderer` 仍 `super(ctx, "slots")`；slot 名在 ui-conversation / ui-settings-general 中原样存在 |
+| `ctx.configForms.get(entryId)` → `ConfigForm{getSnapshot,subscribe,set,unset,mutate}` | 一致 | 一致 | 0.2.1 `ui-settings/lib/client.js` 同名服务、同名方法 |
+| 设置投影：ns = 行 id、schema = `Config`、仅 `.volatile()` 可写 | 一致 | 一致 | 0.2.1 `dsh-settings` 仍用 `entry.options.id` + `volatileForm` |
+
+实测方法（临时 profile，不碰用户 profile；`DSH_HOME` 指到工作区便于沙箱写入）：
+
+```sh
+$env:DSH_HOME='<repo>/.tmp-profile-home'
+dsh plugin --profile scratch add 'file:<repo>'     # pnpm 11 装本地包，无需网络
+dsh --profile scratch --dump-config                # 组合树末尾出现 - id: dsh-weather
+dsh --profile scratch --no-open --port 9788        # 启动 web；页面 __DSH_BOOT__ 中含
+                                                   # @qianluo-ly/dsh-weather/client.js
+```
+
+devDependencies 仍钉 0.1.7-rc.2：本次核对显示类型面未变，**不要**在没有网络/锁文件的情况下
+盲改版本号；真要升级，装精确版本（npm `latest` 是 0.0.1-rc.1 假象）后重跑 `npm run check`。
+
+> 0.2.x 的**更新链路**另有变化（与本插件代码无关，但影响发布后的升级体验）：
+> plugin-manager 对「已安装的同一个包」直接 `installBundle` 会以 `already-installed` 拒绝，
+> 官方做法是先 remove 再 install。旧版 dshmarket（≤1.66.32）的一键更新没有走这条路，
+> 在 0.2.x 上会把插件更新刷成 `already-installed`（见
+> `~/.dsh/profiles/<name>/.dsh-market/log.ndjson`）；且任何会话在跑时市场会以 `update-blocked`
+> 拒绝更新。升级插件请用内置插件管理页（先移除再装目标版本），或等 dshmarket 升到支持 0.2.x 的版本。
+
 ## 产物契约
 
 - `lib/index.js`：Host 半侧，Cordis 插件入口（`apply`）。设置注册是**声明式**的：
