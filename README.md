@@ -13,18 +13,26 @@ DSH Web 会话顶栏的天气插件：**当前天气 + 实时日期时间 + 未�
 
 ## 安装
 
-**方式一：插件市场一键安装（推荐）**
+**方式一：官方内置市场（DSH 0.2.2+，推荐）**
 
-1. 如果还没有插件市场，先安装它：
+1. 打开 **设置 → 插件 → Discover**；
+2. 在索引源里添加这个地址：
 
-   ```sh
-   dsh plugin --profile web add dshmarket
+   ```
+   https://raw.githubusercontent.com/QianLuo-Ly/dsh-weather/main/market/index.json
    ```
 
-2. 重启 `dsh web`，打开 **设置 → 插件市场**，搜索 **weather**，一键安装 `dsh-weather`。
-3. 刷新页面，进入会话即可在顶部操作行看到天气 chip。
+3. 列表里出现 **Weather Bar / 天气栏**，点安装即可。
 
-**方式二：命令行从 GitHub 安装**
+**方式二：第三方 dshmarket（旧市场）**
+
+```sh
+dsh plugin --profile web add dshmarket
+```
+
+重启后打开 **设置 → 插件市场**，搜索 **weather** 安装 `dsh-weather`。
+
+**方式三：命令行从 GitHub 安装**
 
 ```sh
 dsh plugin --profile web add https://github.com/QianLuo-Ly/dsh-weather
@@ -33,7 +41,10 @@ dsh plugin --profile web add https://github.com/QianLuo-Ly/dsh-weather
 重启（或按提示刷新）`dsh web` 后生效。
 
 > 要求 DSH Web **0.1.7 或更新版本**（设置模型自 0.1.7 起换成 `Config` + `configForms`，更老的宿主装上也只会失效）；
-> 桌面端 **0.2.1-rc.2** 已实测兼容（安装、组合、客户端注册均通过）。
+> 桌面端 **0.2.2-rc.5** 已实测兼容（安装、组合、客户端注册、设置读写均通过）。
+>
+> 升级已装过的版本时，宿主会拒绝同名包重复安装（`already-installed`），需要先移除再装：
+> `dsh plugin --profile web remove @qianluo-ly/dsh-weather` 后重新安装。
 
 ## 使用
 

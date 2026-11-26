@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "title": {
+    "en": "QianLuo DSH plugins",
+    "zh": "千洛的 DSH 插件"
+  },
+  "description": {
+    "en": "Plugins for the DeepSeek Harness web client, maintained by QianLuo-Ly.",
+    "zh": "千洛维护的 DeepSeek Harness Web 客户端插件。"
+  },
+  "metadata": {
+    "categories": {
+      "weather": {
+        "title": {
+          "en": "Weather",
+          "zh": "天气"
+        }
+      }
+    },
+    "labels": {},
+    "sortKeys": {}
+  },
+  "plugins": [
+    {
+      "name": "@qianluo-ly/dsh-weather",
+      "title": {
+        "en": "Weather Bar",
+        "zh": "天气栏"
+      },
+      "description": {
+        "en": "Weather chip in the session header: current conditions, live clock, forecasts with day detail, saved cities, and a daily briefing. Open-Meteo data, no API key.",
+        "zh": "会话顶栏的天气 chip：实时天气、实时时钟、含逐日详情的预报、多城市收藏与每日简报。数据来自 Open-Meteo，无需 API key。"
+      },
+      "icon": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA0OCA0OCI+PGNpcmNsZSBjeD0iMTgiIGN5PSIxNyIgcj0iNyIgZmlsbD0iI0Y1Qjk0MiIvPjxwYXRoIGQ9Ik0xMyAzM2E3IDcgMCAwIDEgLjYtMTMuOTZBOSA5IDAgMCAxIDMxLjQgMjAuNSA2LjUgNi41IDAgMCAxIDMxIDMzeiIgZmlsbD0iIzhGQkJFOCIvPjwvc3ZnPg==",
+      "author": "QianLuo-Ly",
+      "homepage": "https://github.com/QianLuo-Ly/dsh-weather",
+      "repository": {
+        "url": "https://github.com/QianLuo-Ly/dsh-weather"
+      },
+      "metadata": {
+        "category": "weather",
+        "keywords": [
+          "weather",
+          "forecast",
+          "open-meteo",
+          "dsh-plugin"
+        ],
+        "labels": []
+      },
+      "versions": [
+        {
+          "version": "0.7.2",
+          "publishTimestamp": 1792382362,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/QianLuo-Ly/dsh-weather",
+            "commit": "8de5b3e096cd74d84eed889ac3e751cfddcb73ee"
+          },
+          "engines": {
+            "dsh": ">=0.1.7-rc.2 <0.3.0-0"
+          }
+        }
+      ]
+    }
+  ]
+}

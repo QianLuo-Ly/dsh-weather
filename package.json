@@ -1,6 +1,6 @@
 {
   "name": "@qianluo-ly/dsh-weather",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "DSH Web 会话顶栏的天气插件：当前天气 + 实时日期时间 + 未来预报（含逐日详情）+ 多城市收藏 + 每日简报（Open-Meteo 数据源，无需 API key）。",
   "homepage": "https://github.com/QianLuo-Ly/dsh-weather",
   "repository": {
@@ -36,6 +36,7 @@
     "verify": "node scripts/verify-bundle.cjs && node scripts/verify-features.cjs && node scripts/verify-units.cjs && node scripts/smoke-client.cjs",
     "check:encoding": "node scripts/check-encoding.mjs",
     "check:lib-sync": "node scripts/check-lib-sync.mjs",
+    "market:index": "node scripts/build-market-index.mjs",
     "probe:cities": "node scripts/calibrate-cities.cjs",
     "probe:live": "node scripts/probe-live.cjs",
     "probe:dust": "node scripts/dust-check.cjs"
@@ -69,12 +70,12 @@
     "@deepseek-ai/schemastery": "^3.18.4"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.4",
-    "@deepseek-ai/dsh-client-ui-layout": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-renderer": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-settings": "0.1.7-rc.2",
-    "@deepseek-ai/dsh-client-ui-slots": "0.1.7-rc.2",
-    "@deepseek-ai/schemastery": "3.18.4",
+    "@deepseek-ai/cordis": "4.1.0",
+    "@deepseek-ai/dsh-client-ui-layout": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-client-ui-renderer": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-client-ui-settings": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.2-rc.5",
+    "@deepseek-ai/schemastery": "3.19.0",
     "@types/node": "^22.0.0",
     "@types/react": "~18.3.1",
     "@types/react-dom": "~18.3.1",

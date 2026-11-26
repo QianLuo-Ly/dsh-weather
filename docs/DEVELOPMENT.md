@@ -27,44 +27,59 @@ pnpm dsh plugin --profile web add D:\path\to\dsh-weather
 > 提示：本机 pnpm 版本若与 profile 的 node_modules 布局不一致，会在
 > `~/.dsh/profiles/web/.npmrc` 里加一行 `virtual-store-dir-max-length=120`。
 
-## 宿主版本兼容（2026-10-19 核对：桌面端 0.2.1-rc.2）
+## 宿主版本兼容（2026-11-26 核对：桌面端 0.2.2-rc.5）
 
 `package.json` 的 `engines.dsh` 声明真实下限 `>=0.1.7-rc.2 <0.3.0-0`（0.1.7 才有 `configForms`）。
 0.2.x 起宿主会在安装前后用 `engines.dsh`（或 `@deepseek-ai/dsh*` peer）做兼容检查
 （`app-boot` 的 `evaluatePluginCompatibility`）：低于 0.1.7 或 0.3+ 会被明确拒绝，
-而不是「装上了但 chip 不出现」。范围用 0.2.1 的评估器实测：`0.1.7-rc.2`～`0.2.99-rc.1` 放行、
-`0.1.6-alpha.1` / `0.3.0-0` 拒绝。
+而不是「装上了但 chip 不出现」。0.2.2 起多了「精确版本豁免」（`compatibility.json` +
+`dsh plugin allow-version`），只在用户显式接受风险时生效，插件侧无需处理。
 
-0.2.1 逐项核对结论——**现有 `src/` 无需改动**：
+0.2.2-rc.5 逐项核对结论——**契约只有一处字段变更，已适配**：
 
-| 契约 | 0.1.7 | 0.2.1-rc.2 | 依据 |
+| 契约 | 0.1.7 | 0.2.2-rc.5 | 依据 |
 | --- | --- | --- | --- |
 | `dsh.bundle.patch`、`exports["./client"]` | 支持 | 支持 | `app-boot` 的 `bundlePatchPaths`、`client-modules` 的 `clientExportOf` |
-| `dsh.client.platform` / `inject` | 支持 | 支持（新增可选 `external`） | 0.2.1 启动图里本插件行仍带 `inject: ["@deepseek-ai/dsh-client-ui-settings"]` |
+| `dsh.client.platform` / `inject` | 支持 | 支持（含可选 `external`） | 启动图里本插件行仍带 `inject: ["@deepseek-ai/dsh-client-ui-settings"]` |
 | 客户端注册 `window.__ModuleLoader__.load({id, factory})` | 一致 | 一致 | 宿主自带包 `lib/client.js` 首行同格式；`id` 仍必须逐字等于包名 |
-| `ctx.slots`（`inject`/`register`）、slot 名 `conversation.session.header.actions`、`settings.section` | 一致 | 一致 | 0.2.1 `ui-renderer` 仍 `super(ctx, "slots")`；slot 名在 ui-conversation / ui-settings-general 中原样存在 |
-| `ctx.configForms.get(entryId)` → `ConfigForm{getSnapshot,subscribe,set,unset,mutate}` | 一致 | 一致 | 0.2.1 `ui-settings/lib/client.js` 同名服务、同名方法 |
-| 设置投影：ns = 行 id、schema = `Config`、仅 `.volatile()` 可写 | 一致 | 一致 | 0.2.1 `dsh-settings` 仍用 `entry.options.id` + `volatileForm` |
+| `ctx.slots`（`inject`/`register`）、slot 名 `conversation.session.header.actions`、`settings.section` | 一致 | 一致 | `ui-renderer` 仍 `super(ctx, "slots")`；`conversation.session.header.actions` 仍是 `{kind:'list',scope:'session'}`，`settings.section` 仍是 `{kind:'list',scope:'root'}` |
+| `ctx.configForms.get(entryId)` → `ConfigForm{getSnapshot,subscribe,set,unset,mutate}` | 一致 | 一致 | `ui-settings` 同名服务、同名方法 |
+| 设置投影：ns = 行 id、schema = `Config`、仅 `.volatile()` 可写 | 一致 | 一致 | `dsh-settings` 仍用 `entry.options.id` + `volatileForm` |
+| **`ConfigFormSnapshot` 字段** | `mode`（含 `memory`） | **`status: 'loading' \| 'ready' \| 'unavailable'`**（另有 `value`/`base`/`user`/`revision`/`writable`） | `ui-settings/src/client/config-form-types.ts`；`WeatherSettingsSection` 的提示行已改为按 `status === 'unavailable'` 显示 |
 
 实测方法（临时 profile，不碰用户 profile；`DSH_HOME` 指到工作区便于沙箱写入）：
 
 ```sh
-$env:DSH_HOME='<repo>/.tmp-profile-home'
-dsh plugin --profile scratch add 'file:<repo>'     # pnpm 11 装本地包，无需网络
-dsh --profile scratch --dump-config                # 组合树末尾出现 - id: dsh-weather
-dsh --profile scratch --no-open --port 9788        # 启动 web；页面 __DSH_BOOT__ 中含
-                                                   # @qianluo-ly/dsh-weather/client.js
+export DSH_HOME='<repo>/.workbuddy/scratch/dsh-home'
+dsh --profile webcopy --from-default-profile web --dump-config   # 从自带 web 模板复制
+dsh plugin --profile webcopy add 'file:<repo>'
+dsh --profile webcopy --dump-config        # 组合树里出现 - id: dsh-weather
+env -u NODE_OPTIONS dsh --profile webcopy --no-open --port 9850  # 页面 __DSH_BOOT__ 中含
+                                                                 # @qianluo-ly/dsh-weather/client.js
 ```
 
-devDependencies 仍钉 0.1.7-rc.2：本次核对显示类型面未变，**不要**在没有网络/锁文件的情况下
-盲改版本号；真要升级，装精确版本（npm `latest` 是 0.0.1-rc.1 假象）后重跑 `npm run check`。
+> ⚠️ 两个只在开发机出现的坑：
+> 1. `dsh web` 的 app 名本身就是 profile 别名，`web --profile X` 会报 `select a profile only once`；
+>    正确写法是 `dsh --profile X`（不带 `web`）。自定义 profile 若没有从 `web` 模板复制，
+>    起来是个空壳，web 端口永远不监听。
+> 2. WorkBuddy 沙箱注入的 `NODE_OPTIONS` 会让宿主子进程继承 safe-delete 垫片，
+>    `dsh-atomic-write` 的每次写入都可能 `SAFE_DELETE_BULK_GUARD_ERROR`；验证时用
+>    `env -u NODE_OPTIONS -u CODEBUDDY_SAFE_DELETE_SANDBOX` 起宿主。
 
-> 0.2.x 的**更新链路**另有变化（与本插件代码无关，但影响发布后的升级体验）：
-> plugin-manager 对「已安装的同一个包」直接 `installBundle` 会以 `already-installed` 拒绝，
-> 官方做法是先 remove 再 install。旧版 dshmarket（≤1.66.32）的一键更新没有走这条路，
-> 在 0.2.x 上会把插件更新刷成 `already-installed`（见
-> `~/.dsh/profiles/<name>/.dsh-market/log.ndjson`）；且任何会话在跑时市场会以 `update-blocked`
-> 拒绝更新。升级插件请用内置插件管理页（先移除再装目标版本），或等 dshmarket 升到支持 0.2.x 的版本。
+devDependencies 已对齐宿主 `0.2.2-rc.5`（cordis 4.1.0 / schemastery 3.19.0）。`peerDependencies`
+仍是 `^4.0.0` / `^3.18.4`，所以 0.1.7 宿主在运行时依旧可用；类型面按 0.2.2 编译，新字段能提前被
+`tsc` 抓到（本次的 `mode` → `status` 就是这样发现的）。
+
+> 0.2.2 的**插件市场**换了形态（与本插件代码无关，但影响分发）：
+> 宿主内置了 `pluginMarket` 服务 + Discover 页 + `plugin_market` agent 工具，索引是
+> **用户配置的 URL 列表**（`Config.indexes`，默认空）。索引格式是 `format: 1` 的 JSON
+> （`@deepseek-ai/dsh-plugin-market-index/types`），每条版本声明 `source`（`npm` 或 `git`+commit）
+> 与 `engines.dsh`。旧的第三方 `dshmarket` 仍在 profile 里，但不再是官方入口。
+> 本包没有发布到 npm（`@qianluo-ly/dsh-weather` 返回 404），所以若能上架市场，`source` 只能是 git。
+>
+> 升级路径仍是老规矩：plugin-manager 对已安装的同名包直接 install 会返回 `already-installed`
+> （`tools.ts` 原文就写着 “call remove_bundle first, then install_bundle again”），
+> 所以「更新」= 先移除再装目标版本；任何会话在跑时第三方市场还可能以 `update-blocked` 拒绝。
 
 ## 产物契约
 
@@ -183,9 +198,44 @@ npm run check        # typecheck → check:encoding → build → verify（断�
 
 ## 发布与收录
 
-本项目**不发布 npm**，纯 GitHub 收录：向 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin)
-仓库提 PR，在 `data/plugins/` 下新增 `QianLuo-Ly__dsh-weather.yml`（草稿见仓库根目录
-`.release/`）。合并后（约一天内）自动出现在 dsh-market 的「设置 → 插件市场」。
+本项目**不发布 npm**，纯 GitHub 分发。
+
+### 官方内置市场（宿主 0.2.2+）
+
+0.2.2 起宿主自带 `pluginMarket` 服务 + Plugins 页的 Discover 标签 + `plugin_market` agent 工具。
+索引是**用户自己配置的一组 URL**（`Config.indexes`，默认空），本仓库自带一份 `format: 1` 的索引：
+
+- 文件：`market/index.json` —— **生成物，不要手改**
+- 生成：`npm run market:index`（默认 HEAD；`--commit <sha>` 指定某个提交）
+- 托管地址（推送到 `main` 后生效）：
+  `https://raw.githubusercontent.com/QianLuo-Ly/dsh-weather/main/market/index.json`
+- 使用：宿主「设置 → 插件 → Discover」添加该 URL，即可看到本插件并一键安装
+
+索引描述**某个 commit**，版本号、`engines.dsh`、homepage 全部从该 commit 的 `package.json` 读，
+而不是工作区——否则会出现「市场写着 0.7.3、装下来的却是 0.7.2」。所以发版顺序固定为：
+
+```sh
+# 1. 改代码 / 改版本号，跑门禁
+npm run check
+# 2. 提交
+git add -A && git commit -m "release: 0.7.3"
+# 3. 用新提交重生成索引，再提交索引
+npm run market:index
+git add market/index.json && git commit -m "chore(market): index 0.7.3"
+# 4. 推送
+git push
+```
+
+本包不在 npm 上，索引里的 `source` 只能是 `git`，安装 spec 形如
+`git+https://github.com/QianLuo-Ly/dsh-weather.git#<40-hex sha>`（由 `marketInstallTarget` 生成）。
+索引格式由宿主校验器把关：`MarketIndexError` 会指出具体 JSON 路径，别靠肉眼猜。
+
+### awesome-dsh-plugin（旧市场）
+
+向 [awesome-dsh-plugin](https://github.com/awesome-dsh-plugin/awesome-dsh-plugin) 仓库提 PR，
+在 `data/plugins/` 下新增 `QianLuo-Ly__dsh-weather.yml`（草稿见仓库根目录 `.release/`，
+那是旧 `dshmarket` 的 `url/name/category` 格式，与 format 1 索引无关）。合并后（约一天内）
+出现在第三方 `dshmarket` 的「设置 → 插件市场」。
 
 发布新版本时：改 `package.json` 版本号（如需）、重新 `npm run check`、推送到
 `main` 即可——市场与网站按仓库自动同步，无需其他步骤。

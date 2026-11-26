@@ -125,9 +125,9 @@ export function WeatherSettingsSection(props: WeatherSettingsSectionProps): Reac
           {notice.text}
         </div>
       )}
-      {snapshot.mode === 'memory' && (
+      {snapshot.status === 'unavailable' && (
         <div style={{ color: MUTED, fontSize: 12.5, marginTop: 8 }}>
-          当前连接为进程内模式，配置仅在本次会话生效。
+          当前宿主未向本客户端暴露天气设置（命名空间未注册或不可写），改动仅在本次会话生效。
         </div>
       )}
 

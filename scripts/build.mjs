@@ -8,12 +8,19 @@
  *                     factory artifact.
  * See scripts/build-lib.mjs for the shared build core.
  */
-import { rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { buildLib, ROOT } from './build-lib.mjs'
 
 // Resolved against the repo root, so `node scripts/build.mjs` from another
-// directory rebuilds this project's `lib/` instead of deleting an unrelated one.
-rmSync(path.join(ROOT, 'lib'), { recursive: true, force: true })
+// directory rebuilds this project's `lib/` instead of touching an unrelated one.
+// Truncate the two known artifacts instead of deleting the directory: recursive
+// deletes (and even single-file rm) trip host bulk-delete guards on Windows
+// sandboxes and trash shims, while the build core overwrites both files anyway.
+const libDir = path.join(ROOT, 'lib')
+mkdirSync(libDir, { recursive: true })
+for (const artifact of ['index.js', 'client.js']) {
+  writeFileSync(path.join(libDir, artifact), '')
+}
 await buildLib('lib')
 console.log('dsh-weather: built lib/index.js (host) and lib/client.js (browser bundle)')
